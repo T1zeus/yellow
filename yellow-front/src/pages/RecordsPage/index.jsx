@@ -9,6 +9,11 @@ const columns = [
         key: 'index',
     },
     {
+        title: '批次编号',
+        dataIndex: 'number',
+        key: 'number',
+    },
+    {
         title: '创建时间',
         dataIndex: 'create_at',
         key: 'create_at',
@@ -34,16 +39,19 @@ const RecordsPage = () => {
             {
                 key: '1',
                 index: '1',
+                number: 'MLXS-2025-663MBG7MJ09',
                 create_at: '2025-11-04 11:00',
             },
             {
                 key: '2',
                 index: '2',
+                number: 'MLXS-2025-663MBG7MJ09',
                 create_at: '2025-11-04 11:00',
             },
             {
                 key: '3',
                 index: '3',
+                number: 'MLXS-2025-663MBG7MJ09',
                 create_at: '2025-11-04 11:00',
             },
         ];
