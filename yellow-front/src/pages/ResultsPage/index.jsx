@@ -9,6 +9,30 @@ const criminalColumns = [
         key: 'index',
     },
     {
+        title: '案发地点',
+        dataIndex: 'criminal_addr',
+        key: 'criminal_addr',
+    },
+    {
+        title: '场所类型',
+        dataIndex: 'criminal_type',
+        key: 'criminal_type',
+        render: (_) => {
+            switch (_) {
+                case 1:
+                    return '小区';
+                case 2:
+                    return '宾馆';
+                case 3:
+                    return '场所';
+                case 4:
+                    return '商务楼';
+                default:
+                    return '其它';
+            }
+        }
+    },
+    {
         title: '案件详情',
         dataIndex: 'criminal_desc',
         key: 'criminal_desc',
@@ -96,7 +120,7 @@ const ResultsPage = () => {
                 name: '小钱',
                 number: '310227199002300992',
                 phone: '18754878998',
-                criminal_count: 2,
+                criminal_count: 3,
                 residence_addr: '新桥镇新中街10000号100010室',
                 live_addr: '新桥镇新中街10000号100010室',
                 belong: '新桥派出所',
@@ -108,7 +132,7 @@ const ResultsPage = () => {
                 name: '小钱',
                 number: '310227199002300992',
                 phone: '18754878998',
-                criminal_count: 2,
+                criminal_count: 3,
                 residence_addr: '新桥镇新中街10000号100010室',
                 live_addr: '新桥镇新中街10000号100010室',
                 belong: '新桥派出所',
@@ -120,7 +144,7 @@ const ResultsPage = () => {
                 name: '小钱',
                 number: '310227199002300992',
                 phone: '18754878998',
-                criminal_count: 2,
+                criminal_count: 3,
                 residence_addr: '新桥镇新中街10000号100010室',
                 live_addr: '新桥镇新中街10000号100010室',
                 belong: '新桥派出所',
@@ -135,16 +159,22 @@ const ResultsPage = () => {
             {
                 key: '1',
                 index: '1',
+                criminal_addr: '上海市松江区一二三路111弄-1号商务中心11楼1101室',
+                criminal_type: 1,
                 criminal_desc: '2025年5月13日，经群众匿名举报，在上海市松江区一二三路111弄-1号商务中心11楼1101室内，有卖淫嫖娼活动。已接报',
             },
             {
                 key: '2',
                 index: '2',
+                criminal_addr: '上海市松江区一二三路111弄-1号商务中心11楼1101室',
+                criminal_type: 2,
                 criminal_desc: '2025年5月13日，经群众匿名举报，在上海市松江区一二三路111弄-1号商务中心11楼1101室内，有卖淫嫖娼活动。已接报',
             },
             {
                 key: '3',
                 index: '3',
+                criminal_addr: '上海市松江区一二三路111弄-1号商务中心11楼1101室',
+                criminal_type: 3,
                 criminal_desc: '2025年5月13日，经群众匿名举报，在上海市松江区一二三路111弄-1号商务中心11楼1101室内，有卖淫嫖娼活动。已接报',
             },
         ];
@@ -169,7 +199,7 @@ const ResultsPage = () => {
                     title="前科记录"
                     onClose={onClose}
                     open={open}
-                    width={800}
+                    width={1000}
                 >
                     <Table columns={criminalColumns} dataSource={criminalData} />
                 </Drawer>
