@@ -1,35 +1,59 @@
 import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
+import {
+  HistoryOutlined,
+  FileOutlined,
+} from '@ant-design/icons';
+import { Layout, Menu, theme } from 'antd';
+import { Routes, Route, Link } from 'react-router-dom';
+
 import './App.css'
+import RecordsPage from './pages/RecordsPage';
+import UploadPage from './pages/UploadPage';
+import ResultsPage from './pages/ResultsPage';
 
-function App() {
-  const [count, setCount] = useState(0)
+const { Header, Content, Footer, Sider } = Layout;
 
-  return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+function getItem(label, key, icon, children) {
+  return {
+    key,
+    icon,
+    children,
+    label,
+  };
 }
+const items = [
+  getItem(<Link to='/'>历史分析记录</Link>, '1', <HistoryOutlined />),
+  getItem(<Link to='/upload'>上传分析文件</Link>, '2', <FileOutlined />),
+];
+
+const App = () => {
+  const [collapsed, setCollapsed] = useState(false);
+  const {
+    token: { colorBgContainer },
+  } = theme.useToken();
+  return (
+    <Layout style={{ minHeight: '100vh' }}>
+      <Sider collapsible collapsed={collapsed} onCollapse={value => setCollapsed(value)}>
+        <div className="logo">扫黄分析系统</div>
+        <Menu theme="dark" defaultSelectedKeys={['1']} mode="inline" items={items} />
+      </Sider>
+      <Layout>
+        <Header style={{ padding: 0, background: colorBgContainer }} />
+
+        <Content style={{ margin: '16px' }}>
+          <Routes>
+            <Route path='/' element={<RecordsPage />} />
+            <Route path='/upload' element={<UploadPage />} />
+            <Route path='/result/:id' element={<ResultsPage />} />
+          </Routes>
+        </Content>
+
+        <Footer style={{ textAlign: 'center' }}>
+          上海谋乐网络科技 ©{new Date().getFullYear()}
+        </Footer>
+      </Layout>
+    </Layout>
+  );
+};
 
 export default App
