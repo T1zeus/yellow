@@ -6,7 +6,7 @@ import {
 import { Layout, Menu, theme } from 'antd';
 import { Routes, Route, Link } from 'react-router-dom';
 
-import './App.css'
+import './styles/app.less';
 import RecordsPage from './pages/RecordsPage';
 import UploadPage from './pages/UploadPage';
 import ResultsPage from './pages/ResultsPage';
