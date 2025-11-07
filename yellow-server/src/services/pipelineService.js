@@ -67,6 +67,14 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
 
     // 阶段2: 数据清洗和合并 (10-20%)
     updateProgress(0, 1, 10, 20)
+    
+    // 调试：统计合并前的从业单位信息
+    const employmentWithEmployer = employmentData.filter(r => {
+      const emp = String(r['从业单位'] || '').trim()
+      return emp !== '' && emp !== 'undefined' && emp !== 'null'
+    }).length
+    console.log(`合并前从业人员数据: ${employmentData.length} 条，其中 ${employmentWithEmployer} 条有从业单位信息`)
+    
     // 合并数据表
     let mergedData = mergeData({
       criminal: criminalData,
@@ -74,6 +82,13 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       employment: employmentData,
       insurance: insuranceData
     })
+    
+    // 调试：统计合并后的从业单位信息
+    const mergedWithEmployer = mergedData.filter(r => {
+      const emp = String(r['从业单位'] || '').trim()
+      return emp !== '' && emp !== 'undefined' && emp !== 'null'
+    }).length
+    console.log(`合并后数据: ${mergedData.length} 条，其中 ${mergedWithEmployer} 条有从业单位信息`)
     
     // 计算前科信息
     const criminalInfoMap = calculateCriminalInfo(criminalData)
@@ -83,12 +98,73 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
 
     console.log(`合并完成: ${mergedData.length} 条记录`)
 
+    // 修复：立即创建从业单位2（与 antiporn 逻辑一致）
+    // antiporn: 在数据合并后立即创建 从业单位2 = 从业单位 + (分类)
+    // 注意：如果一个人有多条从业记录，从业单位和分类可能包含换行符分隔的多个值
+    let employer2Count = 0
+    mergedData = mergedData.map(row => {
+      const employer = String(row['从业单位'] || '').trim()
+      const category = String(row['分类'] || '').trim()
+      
+      // 处理多条从业记录的情况（用换行符分隔）
+      // 如果从业单位或分类包含换行符，需要分别处理每一对
+      const employers = employer ? employer.split('\n').filter(e => e.trim()) : []
+      const categories = category ? category.split('\n').filter(c => c.trim()) : []
+      
+      // 创建从业单位2列表
+      const employer2List = []
+      
+      if (employers.length > 0) {
+        // 如果有多个从业单位，为每个从业单位创建从业单位2
+        for (let i = 0; i < employers.length; i++) {
+          const emp = employers[i].trim()
+          const cat = categories[i] ? categories[i].trim() : (categories.length > 0 ? categories[0].trim() : '')
+          
+          if (cat) {
+            employer2List.push(`${emp}(${cat})`)
+          } else {
+            employer2List.push(emp)
+          }
+        }
+      } else if (categories.length > 0) {
+        // 如果没有从业单位但有分类，只显示分类
+        for (const cat of categories) {
+          employer2List.push(`(${cat.trim()})`)
+        }
+      }
+      
+      // 用换行符连接多个从业单位2
+      const employer2 = employer2List.join('\n')
+      
+      if (employer2) employer2Count++
+      
+      const newRow = { ...row }
+      // 删除原字段
+      delete newRow['从业单位']
+      delete newRow['分类']
+      // 设置新字段
+      newRow['从业单位2'] = employer2
+      
+      return newRow
+    })
+
+    // 统计有多条从业记录的情况
+    const multiEmployerCount = mergedData.filter(row => {
+      const employer2 = String(row['从业单位2'] || '').trim()
+      return employer2.includes('\n')
+    }).length
+    
+    console.log(`从业单位2字段已创建: ${employer2Count} 条记录有从业单位信息`)
+    if (multiEmployerCount > 0) {
+      console.log(`- 其中 ${multiEmployerCount} 条记录有多条从业单位信息`)
+    }
+
     updateProgress(1, 1, 10, 20)
 
     // 阶段3: 交易分析 (20-30%)
     updateProgress(0, 1, 20, 30)
 
-    // 合并交易文件夹
+    // 合并交易文件夹（只检测异常交易，不立即标记，在案发地点提取后再标记）
     const transactionFolderPath = fileMap.get('transaction_files')
     let transactionData = []
     let abnormalTransactions = []
@@ -98,14 +174,11 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       transactionData = mergeTransactionFolder(transactionFolderPath)
       
       if (transactionData.length > 0) {
-        // 检测异常交易
+        // 检测异常交易（但不立即标记到主表）
         abnormalTransactions = detectAbnormalTransactions(transactionData, {
           minAmount: 500,
           minSenders: 1
         })
-        
-        // 标记主表的异常资金
-        mergedData = flagAbnormalTransaction(mergedData, abnormalTransactions)
         
         // 导出交易文件
         const transactionOutputPath = path.join(RESULT_DIR, 'transactions.xlsx')
@@ -120,11 +193,9 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
         }
       } else {
         console.log('交易数据为空')
-        mergedData = flagAbnormalTransaction(mergedData, [])
       }
     } else {
       console.log('未上传交易文件夹')
-      mergedData = flagAbnormalTransaction(mergedData, [])
     }
     
     updateProgress(1, 1, 20, 30)
@@ -250,10 +321,7 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
           console.log('合并酒店数据到主表...')
           mergedData = mergeHotelData(mergedData, hotelData)
           
-          // 导出酒店文件
-          const hotelOutputPath = path.join(RESULT_DIR, 'hotel.xlsx')
-          writeArrayToExcel(hotelData, hotelOutputPath)
-          console.log(`酒店文件已导出: ${hotelData.length} 条记录`)
+          // 注意：不导出 hotel.xlsx（与 antiporn 一致，antiporn 不导出此文件）
         } else {
           // 修复：即使没有酒店数据，也要添加默认字段
           mergedData = mergeHotelData(mergedData, [])
@@ -301,25 +369,24 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
 
     updateProgress(1, 1, 50, 60)
 
+    // 修复：在案发地点提取之后标记异常资金（与 antiporn 逻辑一致）
+    console.log('开始标记异常资金...')
+    console.log(`异常交易数据: ${abnormalTransactions.length} 条`)
+    mergedData = flagAbnormalTransaction(mergedData, abnormalTransactions)
+    
+    // 统计异常资金标记结果
+    const abnormalFundCount = mergedData.filter(row => {
+      const val = row['异常资金']
+      return val === 1 || val === '1' || (typeof val === 'number' && val === 1)
+    }).length
+    console.log(`异常资金标记完成: ${abnormalFundCount} 条记录标记为异常资金`)
+
     //中间阶段: 数据字段处理 (60-80%)
     updateProgress(0, 1, 60, 80)
 
     console.log('开始处理数据字段...')
 
-    // 1. 计算从业单位2（从业单位 + (分类)）
-    mergedData = mergedData.map(row => {
-      const employer = String(row['从业单位'] || '').trim()
-      const category = String(row['分类'] || '').trim()
-      const employer2 = category ? `${employer}(${category})` : employer
-      
-      // 创建新对象
-      const newRow = { ...row }
-      delete newRow['从业单位']
-      delete newRow['分类']
-      newRow['从业单位2'] = employer2
-      
-      return newRow
-    })
+    // 注意：从业单位2已在数据合并后创建，这里不再重复创建
 
     updateProgress(0.2, 1, 60, 80)
 
@@ -378,14 +445,98 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
 
     console.log('数据字段处理完成')
 
-    // 阶段7: 同住人分析 (80-85%)
+    // 阶段7: 字段重命名和同住人分析 (80-85%)
     updateProgress(0, 1, 80, 85)
 
+    console.log('开始字段重命名...')
+    
+    // 修复：在导出 merge.xlsx 之前进行字段重命名（与 antiporn 一致）
+    // antiporn: 在 merge 酒店数据后，立即进行字段重命名，然后计算同住人，最后导出 merge.xlsx
+    mergedData = mergedData.map(row => {
+      const newRow = { ...row }
+      
+      // 重命名字段（与 antiporn 的 rename 逻辑一致）
+      if (newRow['单位名称'] !== undefined) {
+        newRow['社保情况'] = newRow['单位名称']
+        delete newRow['单位名称']
+      }
+      
+      if (newRow['实口户籍地址'] !== undefined) {
+        newRow['户籍地址'] = newRow['实口户籍地址']
+        delete newRow['实口户籍地址']
+      }
+      
+      if (newRow['实口居住地址'] !== undefined && !newRow['居住地址']) {
+        newRow['居住地址'] = newRow['实口居住地址']
+        delete newRow['实口居住地址']
+      }
+      
+      if (newRow['从业单位2'] !== undefined) {
+        newRow['从业单位'] = newRow['从业单位2']
+        delete newRow['从业单位2']
+      }
+      
+      return newRow
+    })
+    
+    console.log('字段重命名完成')
+
     console.log('开始计算同住情况...')
-
     mergedData = calculateRoommate(roommateData, mergedData)
-
     console.log('同住人分析完成')
+
+    // 修复：在添加预警状态之前导出 merge.xlsx（与 antiporn 一致）
+    // antiporn: 在 export_results 函数中，在添加预警状态之前导出 merge.xlsx
+    console.log('开始导出 merge.xlsx...')
+    
+    // 定义 merge.xlsx 需要包含的字段（与 antiporn 的 columns_to_keep 一致）
+    const mergeColumns = [
+      '姓名',
+      '证件类型',
+      '证件号码',
+      '手机号码',
+      '户籍地址',
+      '居住地址',
+      '异常资金',
+      '异常购物',
+      '案发地点',
+      '地点分类',
+      '居住情况',
+      '居住详细',
+      '所属辖区',
+      '案由',
+      '简要案情',
+      '商品名称详细',
+      '社保情况',
+      '从业单位',
+      '前科人员',
+      '前科情况',
+      '前科次数',
+      '入住次数',
+      '同住男人数',
+      '同住信息',
+      '入住信息',
+      '收货地址分类',
+      '收货地址详细',
+      '异常购物_等级',
+      '更新时间',
+    ]
+    
+    // 准备 merge.xlsx 数据：只包含指定字段，确保字段顺序一致
+    // 注意：此时字段重命名已完成，mergedData 中的字段名已经是最终名称
+    const mergeDataForExport = mergedData.map(row => {
+      const mergeRow = {}
+      for (const col of mergeColumns) {
+        // 确保字段存在，如果不存在则为空字符串
+        mergeRow[col] = row[col] !== undefined ? row[col] : ''
+      }
+      return mergeRow
+    })
+    
+    // 导出 merge.xlsx（在添加预警状态之前）
+    const mergeOutputPath = path.join(RESULT_DIR, 'merge.xlsx')
+    writeArrayToExcel(mergeDataForExport, mergeOutputPath)
+    console.log(`merge.xlsx 已导出: ${mergeDataForExport.length} 条记录，包含 ${mergeColumns.length} 个字段`)
 
     updateProgress(1, 1, 80, 85)
 
@@ -477,10 +628,10 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
     for (const row of filteredCriminalData) {
       const id = String(row['证件号码'] || '').trim()
       if (!id) continue
-
+      
       if (!criminalMap.has(id)) {
-        // 第一条记录，直接保存
-        criminalMap.set(id, { ...row })
+        // 第一条记录，直接保存（使用深拷贝确保所有字段都被保留）
+        criminalMap.set(id, JSON.parse(JSON.stringify(row)))
       } else {
         // 已存在，合并案发地点和简要案情（用换行符连接）
         const existing = criminalMap.get(id)
@@ -506,12 +657,60 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
             existing['简要案情'] = newCase
           }
         }
+        
+        // 确保其他字段（如异常资金、从业单位等）被保留
+        // 注意：字段重命名已在阶段7完成，这里使用最终字段名（从业单位，不是从业单位2）
+        // 对于关键字段，优先保留非空值
+        for (const key of Object.keys(row)) {
+          if (key !== '案发地点' && key !== '简要案情' && key !== '证件号码') {
+            const existingVal = existing[key]
+            const newVal = row[key]
+            
+            // 对于数字字段（异常资金、入住次数等），0 是有效值，不应该被替换
+            const isNumericField = ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况'].includes(key)
+            
+            if (isNumericField) {
+              // 数字字段：如果现有值为 undefined/null/空字符串，使用新值（包括0）
+              if ((existingVal === undefined || existingVal === null || existingVal === '') && 
+                  (newVal !== undefined && newVal !== null && newVal !== '')) {
+                existing[key] = newVal
+              } else if (typeof existingVal === 'number' && existingVal === 0 && 
+                         typeof newVal === 'number' && newVal !== 0) {
+                // 如果现有值是0，新值不是0，使用新值
+                existing[key] = newVal
+              }
+            } else {
+              // 字符串字段：如果现有值为空，使用新值
+              // 对于从业单位等关键字段，优先保留非空值
+              if ((existingVal === undefined || existingVal === null || existingVal === '') && 
+                  (newVal !== undefined && newVal !== null && newVal !== '')) {
+                existing[key] = newVal
+              } else if (key === '从业单位' && existingVal && !newVal) {
+                // 如果现有值有从业单位，新值没有，保持现有值
+                // 不做任何操作
+              } else if (key === '从业单位' && !existingVal && newVal) {
+                // 如果现有值没有从业单位，新值有，使用新值
+                existing[key] = newVal
+              }
+            }
+          }
+        }
       }
-    }
+    } 
 
     // 转换为数组，用于后续导出
     const summaryData = Array.from(criminalMap.values())
+    
+    // 统计聚合后的数据质量（注意：字段重命名已在阶段7完成，这里使用最终字段名）
+    const hasEmployer = summaryData.filter(row => row['从业单位'] && String(row['从业单位']).trim() !== '').length
+    const hasAbnormalFund = summaryData.filter(row => {
+      const val = row['异常资金']
+      return val === 1 || val === '1' || (typeof val === 'number' && val === 1)
+    }).length
+    
     console.log(`前科人员聚合完成: ${summaryData.length} 条唯一记录`)
+    console.log(`- 有从业单位信息: ${hasEmployer} 条`)
+    console.log(`- 有异常资金: ${hasAbnormalFund} 条`)
 
     updateProgress(1, 1, 95, 96)
     
@@ -520,33 +719,23 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
 
     console.log('开始最终数据整理...')
 
-    // 1. 字段重命名（应用到 summaryData）
+    // 注意：字段重命名已在阶段7完成，summaryData 中的字段名已经是最终名称
+    // 这里只需要处理数据格式（数字字段类型等）
     const processedSummaryData = summaryData.map(row => {
       const newRow = { ...row }
-      
-      // 重命名字段
-      if (newRow['单位名称'] !== undefined) {
-        newRow['社保情况'] = newRow['单位名称']
-        delete newRow['单位名称']
-      }
-      
-      if (newRow['实口户籍地址'] !== undefined) {
-        newRow['户籍地址'] = newRow['实口户籍地址']
-        delete newRow['实口户籍地址']
-      }
-      
-      if (newRow['实口居住地址'] !== undefined && !newRow['居住地址']) {
-        newRow['居住地址'] = newRow['实口居住地址']
-        delete newRow['实口居住地址']
-      }
-      
-      if (newRow['从业单位2'] !== undefined) {
-        newRow['从业单位'] = newRow['从业单位2']
-        delete newRow['从业单位2']
-      }
-      
+      // 字段重命名已在阶段7完成，这里不需要再次重命名
       return newRow
     })
+
+    // 统计字段重命名后的数据质量
+    const hasEmployerAfterRename = processedSummaryData.filter(row => row['从业单位'] && String(row['从业单位']).trim() !== '').length
+    const hasAbnormalFundAfterRename = processedSummaryData.filter(row => {
+      const val = row['异常资金']
+      return val === 1 || val === '1' || (typeof val === 'number' && val === 1)
+    }).length
+    console.log(`字段重命名完成:`)
+    console.log(`- 有从业单位信息: ${hasEmployerAfterRename} 条`)
+    console.log(`- 有异常资金: ${hasAbnormalFundAfterRename} 条`)
 
     updateProgress(0.5, 1, 96, 100)
 
@@ -585,7 +774,7 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       '更新时间',
     ]
 
-    // 只保留存在的列，并正确处理字段类型
+    // 处理最终数据，确保数字字段类型正确
     const finalData = processedSummaryData.map(row => {
       const resultRow = {}
       for (const col of resultColumns) {
@@ -594,7 +783,7 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
           let val = row[col]
           // 转换为数字，空值/NaN/空字符串 转为 0
           if (val === null || val === undefined || val === '' || val === 'NaN' || val === 'nan' || val === 'None') {
-            resultRow[col] = 0
+            resultRow[col] = 0  // 确保是数字 0，不是字符串
           } else if (typeof val === 'number') {
             // 已经是数字，直接使用（包括 0）
             resultRow[col] = isNaN(val) ? 0 : val
@@ -627,10 +816,7 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
 
     updateProgress(1, 1, 96, 100)
 
-    //  导出合并数据（包含所有数据，用于调试）
-    const mergeOutputPath = path.join(RESULT_DIR, 'merge.xlsx')
-    writeArrayToExcel(mergedData, mergeOutputPath)
-    console.log(`合并数据已导出: ${mergeOutputPath}`)
+    // 注意：merge.xlsx 已在阶段7（同住人分析之后，预警状态之前）导出，这里不再重复导出
 
     // 完成
     progressStore.set(100, '')

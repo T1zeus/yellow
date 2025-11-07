@@ -325,21 +325,32 @@ async function processShoppingData(shoppingData) {
   }))
 
   // 6. 收货地址分类（逐条调用 LLM）
+  console.log(`开始地址分类，共 ${processedShopping.length} 条记录`)
   const shoppingWithAddressClass = []
   for (let i = 0; i < processedShopping.length; i++) {
     const row = processedShopping[i]
     const address = String(row['收货地址'] || '').trim()
-    const addressClass = await classifyAddress(address)
-    shoppingWithAddressClass.push({
-      ...row,
-      收货地址分类: addressClass,
-    })
+    
+    try {
+      const addressClass = await classifyAddress(address)
+      shoppingWithAddressClass.push({
+        ...row,
+        收货地址分类: addressClass,
+      })
 
-    // 每处理10条输出一次进度
-    if ((i + 1) % 10 === 0) {
-      console.log(`地址分类进度: ${i + 1}/${processedShopping.length}`)
+      // 每处理10条输出一次进度
+      if ((i + 1) % 10 === 0) {
+        console.log(`地址分类进度: ${i + 1}/${processedShopping.length}`)
+      }
+    } catch (error) {
+      console.error(`[地址分类错误] 第 ${i + 1} 条记录:`, error.message)
+      shoppingWithAddressClass.push({
+        ...row,
+        收货地址分类: '其他',
+      })
     }
   }
+  console.log(`地址分类完成，共处理 ${shoppingWithAddressClass.length} 条记录`)
 
   // 7. 构建收货地址详细信息
   const shoppingWithAddressDetail = buildShoppingDetail(shoppingWithAddressClass)

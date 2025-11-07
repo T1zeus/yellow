@@ -10,6 +10,110 @@ const { classifyAddress } = require('./shoppingService')
 // 初始化缓存管理器（使用 llm_cache.json）
 const addressCache = new LLMCacheManager('llm_cache.json')
 
+const KEYWORDS = [
+  '小区',
+  '公寓',
+  '商务中心',
+  '大厦',
+  '广场',
+  '市场',
+  '酒店',
+  '宾馆',
+  '会所',
+  '足浴',
+  '足疗',
+  'SPA',
+  '养生馆',
+  '养生店',
+  '养生会所',
+  'KTV',
+  '酒吧',
+  '浴场',
+  '娱乐城',
+  '写字楼',
+  '办公楼',
+  '工厂',
+  '厂区'
+]
+
+function trimAddressToLandmark(address) {
+  if (!address) return ''
+  let trimmed = String(address).trim()
+  if (!trimmed) return ''
+
+  // 去掉前后标点
+  trimmed = trimmed.replace(/^[，,。；;\s]+/, '').replace(/[，,。；;\s]+$/, '')
+
+  const cutPositions = []
+  for (const keyword of KEYWORDS) {
+    const idx = trimmed.indexOf(keyword)
+    if (idx !== -1) {
+      cutPositions.push(idx + keyword.length)
+    }
+  }
+
+  const roadNumberMatch = trimmed.match(/(.*?(路|街|道|巷|弄)\d+号)/)
+  if (roadNumberMatch && roadNumberMatch[1]) {
+    cutPositions.push(roadNumberMatch[1].length)
+  }
+
+  if (cutPositions.length === 0) {
+    return trimmed
+  }
+
+  const cutPos = Math.max(...cutPositions)
+  let result = trimmed.slice(0, cutPos).trim()
+
+  // 去掉“等人”“等犯罪嫌疑人”等尾巴
+  result = result.replace(/等[\u4e00-\u9fa5A-Za-z0-9]*$/, '')
+  result = result.replace(/[，,。；;\s]+$/, '')
+
+  return result.trim()
+}
+
+function extractAddressByRegex(text) {
+  if (!text) return ''
+  const source = String(text)
+
+  const patterns = [
+    /(上海市[^，。；\s]*?(?:小区|公寓|商务中心|大厦|广场|市场|酒店|宾馆|会所|足浴|足疗|SPA|养生馆|KTV|酒吧|浴场|娱乐城))/,
+    /(松江区[^，。；\s]*?(?:小区|公寓|商务中心|大厦|广场|市场|酒店|宾馆|会所|足浴|足疗|SPA|养生馆|KTV|酒吧|浴场|娱乐城))/,
+    /([\u4e00-\u9fa5A-Za-z0-9\u3001\-]+?(?:小区|公寓|商务中心|大厦|广场|市场|酒店|宾馆|会所|足浴|足疗|SPA|养生馆|KTV|酒吧|浴场|娱乐城))/,
+    /(上海市[^，。；\s]*(?:路|街|道|巷|弄)\d+号[^，。；\s]*?(?:小区|公寓|商务中心|大厦|广场|市场|酒店|宾馆|会所|足浴|足疗|SPA|养生馆|KTV|酒吧|浴场|娱乐城)?)/,
+    /([\u4e00-\u9fa5A-Za-z0-9\-]+?(?:路|街|道|巷|弄)\d+号[^，。；\s]*?(?:小区|公寓|商务中心|大厦|广场|市场|酒店|宾馆|会所|足浴|足疗|SPA|养生馆|KTV|酒吧|浴场|娱乐城)?)/
+  ]
+
+  for (const pattern of patterns) {
+    const match = source.match(pattern)
+    if (match && match[0]) {
+      const trimmed = trimAddressToLandmark(match[0])
+      if (trimmed && trimmed.length >= 4) {
+        return trimmed
+      }
+    }
+  }
+
+  return ''
+}
+
+function normalizeAddress(rawAddress, originalText) {
+  let result = trimAddressToLandmark(rawAddress)
+  if (result && result.length >= 4 && !result.includes('无地址')) {
+    return result
+  }
+
+  const regexResult = extractAddressByRegex(originalText)
+  if (regexResult && regexResult.length >= 4) {
+    return regexResult
+  }
+
+  if (rawAddress && !rawAddress.includes('无地址') && rawAddress.trim().length >= 4) {
+    return rawAddress.trim()
+  }
+
+  return ''
+}
+
 /**
  * 从简要案情中提取地址（使用 LLM）
  * @param {string} text - 简要案情文本
@@ -24,14 +128,13 @@ async function extractAddressByLLM(text) {
 
   // 检查缓存
   if (addressCache.has(textStr)) {
-    const result = addressCache.get(textStr)
-    console.log(`[LLM Cache] 地址提取 ${textStr.substring(0, 50)}... -> ${result}`)
-    
-    // 验证结果
-    if (!result || result.includes('无地址') || result.includes('不详') || result.trim().length < 6) {
-      return ''
+    const cached = addressCache.get(textStr)
+    const normalizedCached = normalizeAddress(cached, textStr)
+    if (normalizedCached) {
+      console.log(`[LLM Cache] 地址提取 ${textStr.substring(0, 50)}... -> ${normalizedCached}`)
+      return normalizedCached
     }
-    return result
+    console.log(`[LLM Cache] 地址提取 ${textStr.substring(0, 50)}... -> (缓存结果无效，尝试重新提取)`)
   }
 
   const prompt = `
@@ -60,19 +163,28 @@ ${textStr}
     console.log(`[LLM提取] 原文：${textStr.substring(0, 50)}...`)
     console.log(`[LLM提取] 结果：${result}`)
 
-    // 保存到缓存
-    addressCache.set(textStr, result)
+    const normalizedResult = normalizeAddress(result, textStr)
 
-    // 验证结果：如果包含"无地址"或"不详"，或长度小于6，返回空字符串
-    if (!result || result.includes('无地址') || result.includes('不详') || result.trim().length < 6) {
+    // 保存到缓存（存储最终结果，避免再次处理）
+    addressCache.set(textStr, normalizedResult || result)
+
+    if (!normalizedResult) {
       return ''
     }
 
-    return result
+    return normalizedResult
   } catch (error) {
     console.error(`[地址提取错误] ${textStr.substring(0, 50)}...:`, error.message)
-    return ''
   }
+
+  const fallback = extractAddressByRegex(textStr)
+  if (fallback) {
+    console.log(`[LLM提取] 结果为空，正则回退获得地址：${fallback}`)
+    addressCache.set(textStr, fallback)
+    return fallback
+  }
+
+  return ''
 }
 
 /**

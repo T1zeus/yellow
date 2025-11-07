@@ -8,13 +8,27 @@ const iconv = require('iconv-lite')
  */
 function cleanIdNumber(value) {
   if (value == null || value === '') return ''
-  let cleaned = String(value)
-    .replace(/\.0+$/, '')      // 去除 .0 后缀（如：123.0 → 123）
-    .replace(/^'/, '')        // 去除开头的单引号（如：'123 → 123）
-    .replace(/\s+/g, '')      // 去除所有空格
-    .replace(/\n/g, '')       // 去除换行
-    .replace(/\r/g, '')       // 去除回车
+
+  const original = String(value)
+  let cleaned = original
+    .replace(/\.0+$/, '') // 去除 .0 后缀（如：123.0 → 123）
+    .replace(/^'/, '') // 去除开头的单引号（如：'123 → 123）
+    .replace(/\*/g, '') // 去除星号（部分数据会用 * 替代）
+    .replace(/[\s\n\r\u00A0\u3000]+/g, '') // 去除常见空白字符（含全角空格）
     .trim()
+    .toUpperCase()
+
+  if (cleaned === '') {
+    return ''
+  }
+
+  const isValidId = /^\d{17}[\dX]$/.test(cleaned) || /^\d{15}$/.test(cleaned)
+
+  if (!isValidId) {
+    console.warn(`【cleanIdNumber】证件号码格式异常，数据将被丢弃: 原值="${original}", 清理后="${cleaned}"`)
+    return ''
+  }
+
   return cleaned
 }
 
@@ -32,10 +46,14 @@ function isValueEmpty(value) {
 /**
  * 合并两个行对象（解决列名冲突）
  * 使用 combine_first 逻辑：如果左值为空，使用右值；否则使用左值
+ * 对于特定字段（如从业单位、分类），如果两边都有值且不同，则聚合它们
  */
 function mergeTwoRows(row1, row2, onColumn) {
   const merged = { ...row1 }
 
+  // 需要聚合的字段（如果两边都有值且不同，则用换行符连接）
+  const aggregateFields = ['从业单位', '分类', '商铺地址']
+  
   // 收集所有列名
   const allColumns = new Set([...Object.keys(row1), ...Object.keys(row2)])
 
@@ -49,11 +67,51 @@ function mergeTwoRows(row1, row2, onColumn) {
     const val1 = row1[col]
     const val2 = row2[col]
 
-    // combine_first 逻辑：如果 val1 为空，使用 val2；否则使用 val1
-    if (isValueEmpty(val1)) {
-      merged[col] = val2 !== undefined ? val2 : ''
+    // 对于需要聚合的字段，如果两边都有值且不同，则聚合
+    if (aggregateFields.includes(col)) {
+      const str1 = String(val1 || '').trim()
+      const str2 = String(val2 || '').trim()
+      
+      // 处理多条记录的情况：如果已有换行符分隔的值，需要检查是否已包含新值
+      if (str1 && str2) {
+        // 两边都有值
+        if (str1 === str2) {
+          // 值相同，使用任意一个
+          merged[col] = str1
+        } else {
+          // 值不同，需要聚合
+          // 如果 str1 已经包含换行符（多条记录），检查是否已包含 str2
+          if (str1.includes('\n')) {
+            const existingValues = str1.split('\n').map(s => s.trim()).filter(s => s)
+            if (!existingValues.includes(str2)) {
+              // str2 不在现有值中，添加它
+              merged[col] = `${str1}\n${str2}`
+            } else {
+              // str2 已在现有值中，保持原值
+              merged[col] = str1
+            }
+          } else {
+            // str1 是单个值，直接连接
+            merged[col] = `${str1}\n${str2}`
+          }
+        }
+      } else if (str1) {
+        // 左值有值，使用左值
+        merged[col] = str1
+      } else if (str2) {
+        // 左值空，右值有值，使用右值
+        merged[col] = str2
+      } else {
+        // 两边都空
+        merged[col] = ''
+      }
     } else {
-      merged[col] = val1
+      // 其他字段：combine_first 逻辑：如果 val1 为空，使用 val2；否则使用 val1
+      if (isValueEmpty(val1)) {
+        merged[col] = val2 !== undefined ? val2 : ''
+      } else {
+        merged[col] = val1
+      }
     }
   }
 
@@ -75,7 +133,6 @@ function mergeAndResolveConflicts(data1, data2, options = {}) {
   if (!data1 || data1.length === 0) return data2 || []
   if (!data2 || data2.length === 0) return data1 || []
 
-  // 清理合并键：统一格式
   const cleanData1 = data1.map(row => ({
     ...row,
     [onColumn]: cleanIdNumber(row[onColumn]),
@@ -85,7 +142,6 @@ function mergeAndResolveConflicts(data1, data2, options = {}) {
     [onColumn]: cleanIdNumber(row[onColumn]),
   }))
 
-  // 创建索引：以证件号码为键
   const index1 = new Map()
   for (const row of cleanData1) {
     const key = String(row[onColumn] || '')
@@ -108,69 +164,65 @@ function mergeAndResolveConflicts(data1, data2, options = {}) {
     }
   }
 
-  // 收集所有唯一的键
   const allKeys = new Set()
   for (const key of index1.keys()) allKeys.add(key)
   for (const key of index2.keys()) allKeys.add(key)
 
-  // 合并结果（类似 pandas 的 merge）
   const merged = []
 
   for (const key of allKeys) {
     const rows1 = index1.get(key) || []
     const rows2 = index2.get(key) || []
 
-    // 根据合并方式决定如何处理
     if (how === 'inner' && (rows1.length === 0 || rows2.length === 0)) {
-      continue // inner join：只保留两边都有的
+      continue
     }
 
     if (how === 'left' && rows1.length === 0) {
-      continue // left join：只保留 data1 中的
+      continue
     }
 
     if (how === 'right' && rows2.length === 0) {
-      continue // right join：只保留 data2 中的
+      continue
     }
 
-    // pandas merge 的行为：
-    // - 如果两边都有数据，做笛卡尔积（每条左行与每条右行合并）
-    // - 如果只有一边有数据，直接保留
     if (rows1.length > 0 && rows2.length > 0) {
-      // 笛卡尔积合并
       for (const r1 of rows1) {
         for (const r2 of rows2) {
-          merged.push(mergeTwoRows(r1, r2, onColumn))
+          const mergedRow = mergeTwoRows(r1, r2, onColumn)
+          merged.push(mergedRow)
         }
       }
     } else if (rows1.length > 0) {
-      // 只有 data1 有数据，直接保留
       merged.push(...rows1)
     } else if (rows2.length > 0) {
-      // 只有 data2 有数据，直接保留
       merged.push(...rows2)
     }
   }
 
-// 去重：如果同一个证件号码有多条记录，合并它们
-  const resultMap = new Map()
+  console.log(`合并完成（保留所有行）：${data1.length} + ${data2.length} -> ${merged.length} 条记录`)
+
+  // 调试：统计每个证件号码出现次数
+  const idCountMap = new Map()
+  const suspiciousRows = []
   for (const row of merged) {
     const key = String(row[onColumn] || '')
-    if (key && key !== '') {
-      if (!resultMap.has(key)) {
-        resultMap.set(key, row)
-      } else {
-        // 如果已存在，合并相同列（combine_first：左值优先，空值用右值填充）
-        const existing = resultMap.get(key)
-        const mergedRow = mergeTwoRows(existing, row, onColumn)
-        resultMap.set(key, mergedRow)
+    if (key) {
+      idCountMap.set(key, (idCountMap.get(key) || 0) + 1)
+      if (key === '310227199002301000') {
+        suspiciousRows.push(row)
       }
     }
   }
+  console.log('合并后证件号码出现次数（前10个）:', Array.from(idCountMap.entries()).slice(0, 10))
+  if (suspiciousRows.length > 0) {
+    console.warn('【调试】检测到证件号 310227199002301000，相关记录如下:')
+    for (const row of suspiciousRows) {
+      console.warn(JSON.stringify(row))
+    }
+  }
 
-  const result = Array.from(resultMap.values())
-  console.log(`合并完成：${data1.length} + ${data2.length} -> ${result.length} 条记录`)
-  return result
+  return merged
 }
 
 /**
@@ -206,23 +258,39 @@ function mergeData(dataSources) {
 function cleanData(data) {
   if (!data || data.length === 0) return []
   
-  return data.map(row => {
+  const cleanedRows = []
+  let skippedMissingId = 0
+  let skippedInvalidId = 0
+  
+  for (const row of data) {
     const cleaned = { ...row }
-    
-    // 清理证件号码
-    if (cleaned['证件号码']) {
-      cleaned['证件号码'] = cleanIdNumber(cleaned['证件号码'])
+
+    if (cleaned['证件号码'] !== undefined && cleaned['证件号码'] !== null && cleaned['证件号码'] !== '') {
+      const cleanedId = cleanIdNumber(cleaned['证件号码'])
+      if (!cleanedId) {
+        skippedInvalidId++
+        console.warn(`【cleanData】证件号码无效，跳过该行: ${JSON.stringify(row)}`)
+        continue
+      }
+      cleaned['证件号码'] = cleanedId
+    } else {
+      skippedMissingId++
+      console.warn(`【cleanData】缺少证件号码，跳过该行: ${JSON.stringify(row)}`)
+      continue
     }
     
-    // 清理所有字符串字段（去除首尾空格）
     for (const key in cleaned) {
       if (typeof cleaned[key] === 'string') {
         cleaned[key] = cleaned[key].trim()
       }
     }
-    
-    return cleaned
-  })
+
+    cleanedRows.push(cleaned)
+  }
+  
+  console.log(`cleanData: 原始 ${data.length} 行，保留 ${cleanedRows.length} 行，缺少证件号跳过 ${skippedMissingId} 行，证件号无效跳过 ${skippedInvalidId} 行`)
+  
+  return cleanedRows
 }
 
 /**
@@ -280,18 +348,50 @@ function processEmploymentData(employmentData) {
   const processed = data.map((row) => {
     const newRow = {}
 
-    // 复制所有原始列
+    // 复制所有原始列（保留原始数据，用于调试和备用）
     for (const key of Object.keys(row)) {
-      newRow[key.trim()] = row[key]
+      const trimmedKey = key.trim()
+      newRow[trimmedKey] = row[key]
+      // 同时保留原始字段名（可能包含空格），用于字段映射
+      if (trimmedKey !== key) {
+        newRow[key] = row[key]
+      }
     }
 
     // 映射到标准列名
     for (const [targetCol, possibleNames] of Object.entries(columnMapping)) {
+      let found = false
       for (const possibleName of possibleNames) {
-        if (row[possibleName] !== undefined) {
-          newRow[targetCol] = row[possibleName]
-          break
+        // 检查原始字段名（可能包含空格或大小写不同）
+        const originalKey = Object.keys(row).find(k => {
+          const kTrimmed = k.trim()
+          return kTrimmed === possibleName.trim() || k === possibleName
+        })
+        
+        if (originalKey !== undefined && row[originalKey] !== undefined) {
+          const val = String(row[originalKey]).trim()
+          // 过滤无效值
+          if (val !== '' && val !== 'undefined' && val !== 'null' && val !== 'NaN') {
+            newRow[targetCol] = row[originalKey]
+            found = true
+            break
+          }
         }
+        
+        // 也检查直接匹配（字段名完全一致）
+        if (row[possibleName] !== undefined) {
+          const val = String(row[possibleName]).trim()
+          if (val !== '' && val !== 'undefined' && val !== 'null' && val !== 'NaN') {
+            newRow[targetCol] = row[possibleName]
+            found = true
+            break
+          }
+        }
+      }
+      
+      // 如果没找到，设置为空字符串（而不是 undefined）
+      if (!found) {
+        newRow[targetCol] = ''
       }
     }
 
@@ -304,28 +404,18 @@ function processEmploymentData(employmentData) {
     return name !== '' && name !== 'undefined' && name !== 'null' && name !== 'NaN'
   })
 
-  // 5. 清理证件号码（去除星号，转换为数字）
+  // 5. 清理证件号码（保持为字符串，避免精度丢失）
   filtered = filtered.map(row => {
-    let idNum = String(row['证件号码'] || '')
-      .replace(/\*/g, '') // 去除星号
-      .trim()
+    const rawId = row['证件号码']
+    const cleanedId = cleanIdNumber(rawId)
 
-    // 尝试转换为数字（去除非数字字符）
-    const numericPart = idNum.replace(/\D/g, '')
-    if (numericPart.length > 0) {
-      try {
-        const num = parseInt(numericPart, 10)
-        if (!isNaN(num) && num > 0) {
-          idNum = String(num)
-        }
-      } catch (e) {
-        // 转换失败，保持原值
-      }
+    if (cleanedId && !/^\d{17}[\dX]$/.test(cleanedId) && !/^\d{15}$/.test(cleanedId)) {
+      console.warn(`【从业数据】证件号码格式异常: 姓名="${row['姓名'] || ''}", 原值="${rawId}", 清理后="${cleanedId}"`)
     }
 
     return {
       ...row,
-      证件号码: idNum,
+      证件号码: cleanedId,
     }
   })
 
@@ -337,14 +427,33 @@ function processEmploymentData(employmentData) {
 
   // 6. 前向填充：分类、商铺地址、从业单位
   // 如果当前行的这些字段为空，使用上一行的值
+  // 关键：前向填充时，证件号码不应该被填充，必须保持每行的原始证件号码
   let lastCategory = ''
   let lastShopAddress = ''
   let lastEmployer = ''
 
   filtered = filtered.map(row => {
-    const category = String(row['分类'] || '').trim()
-    const shopAddress = String(row['商铺地址'] || '').trim()
-    const employer = String(row['从业单位'] || '').trim()
+    // 保存原始证件号码（前向填充不应该影响证件号码）
+    const originalIdNumber = String(row['证件号码'] || '').trim()
+    
+    let category = String(row['分类'] || '').trim()
+    let shopAddress = String(row['商铺地址'] || '').trim()
+    let employer = String(row['从业单位'] || '').trim()
+    
+    // 修复：如果从业单位为空，尝试从原始字段中获取（字段映射可能失败）
+    if (!employer || employer === 'undefined' || employer === 'null' || employer === '') {
+      // 尝试从原始字段中获取
+      employer = String(row['商铺简称'] || row['单位名称'] || '').trim()
+      if (employer && employer !== 'undefined' && employer !== 'null') {
+        // 如果从原始字段获取到值，更新到从业单位字段
+        row['从业单位'] = employer
+      }
+    }
+
+    // 过滤无效值
+    if (category === 'undefined' || category === 'null' || category === 'NaN') category = ''
+    if (shopAddress === 'undefined' || shopAddress === 'null' || shopAddress === 'NaN') shopAddress = ''
+    if (employer === 'undefined' || employer === 'null' || employer === 'NaN') employer = ''
 
     // 如果当前行有值，更新last值
     if (category) lastCategory = category
@@ -352,13 +461,24 @@ function processEmploymentData(employmentData) {
     if (employer) lastEmployer = employer
 
     // 如果当前行为空，使用last值
+    // 关键：确保证件号码不被前向填充覆盖，保持原始值
     return {
       ...row,
+      证件号码: originalIdNumber, // 确保证件号码不被前向填充影响
       分类: category || lastCategory,
       商铺地址: shopAddress || lastShopAddress,
       从业单位: employer || lastEmployer,
     }
   })
+  
+  // 统计有从业单位信息的记录
+  const withEmployer = filtered.filter(row => {
+    const emp = String(row['从业单位'] || '').trim()
+    return emp !== '' && emp !== 'undefined' && emp !== 'null'
+  }).length
+  
+  console.log(`从业数据处理完成：${filtered.length} 条记录`)
+  console.log(`- 其中 ${withEmployer} 条记录有从业单位信息`)
 
   // 7. 最后清理证件号码（使用cleanIdNumber统一格式）
   filtered = filtered.map(row => ({
@@ -407,28 +527,38 @@ function readAndCleanData(filePath) {
   const cleaned = cleanData(data)
   
   // 修复：正确处理中文文件名编码（支持 UTF-8 和 GBK）
+  let decodedFileName = path.basename(filePath)
   try {
     const fileName = path.basename(filePath)
-    let decodedFileName = fileName
-    
-    // 尝试 GBK 解码
+    let tentative = fileName
+
     try {
       const gbkDecoded = iconv.decode(Buffer.from(fileName, 'binary'), 'gbk')
-      // 检查是否包含乱码字符
       const hasInvalidChars = /[^\u4e00-\u9fa5\w\s\-_.()\[\]（）【】]/g.test(gbkDecoded)
-      
       if (!hasInvalidChars && gbkDecoded !== fileName) {
-        decodedFileName = gbkDecoded
+        tentative = gbkDecoded
       }
-    } catch (e) {
-      // 如果解码失败，使用原始文件名（可能是 UTF-8）
-      decodedFileName = fileName
-    }
-    
-    console.log(`读取文件: ${decodedFileName} - ${cleaned.length} 条记录`)
+    } catch (e) {}
+
+    decodedFileName = tentative
   } catch (e) {
-    // 如果转换失败，使用原始文件名
-    console.log(`读取文件: ${path.basename(filePath)} - ${cleaned.length} 条记录`)
+    decodedFileName = path.basename(filePath)
+  }
+  
+  const idSet = new Set()
+  const suspiciousIds = []
+  for (const row of cleaned) {
+    const id = String(row['证件号码'] || '').trim()
+    if (id) {
+      idSet.add(id)
+      if (!( /^\d{17}[\dX]$/.test(id) || /^\d{15}$/.test(id) )) {
+        suspiciousIds.push(id)
+      }
+    }
+  }
+  console.log(`读取文件: ${decodedFileName} - ${cleaned.length} 条记录，唯一证件号 ${idSet.size} 个`)
+  if (suspiciousIds.length > 0) {
+    console.warn(`【readAndCleanData】检测到可疑证件号: ${JSON.stringify(suspiciousIds.slice(0, 5))}${suspiciousIds.length > 5 ? ' ...' : ''}`)
   }
   
   return cleaned
