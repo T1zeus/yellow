@@ -1,0 +1,281 @@
+const fs = require('fs')
+const path = require('path')
+const { readExcelToArray, writeArrayToExcel } = require('./excelService')
+
+/**
+ * 合并交易文件夹，生成汇总数据
+ * 交易文件夹结构：transaction/证件号码-姓名/xxx.xlsx
+ * @param {string} folderPath - 交易文件夹路径
+ * @returns {Array<Object>} 合并后的交易数据数组
+ */
+function mergeTransactionFolder(folderPath) {
+  if (!folderPath || !fs.existsSync(folderPath)) {
+    console.warn('交易文件夹不存在:', folderPath)
+    return []
+  }
+
+  const allData = []
+  const items = fs.readdirSync(folderPath, { withFileTypes: true })
+
+  for (const item of items) {
+    if (!item.isDirectory()) continue
+
+    const personFolder = item.name
+    const personPath = path.join(folderPath, personFolder)
+
+    // 解析文件夹名：格式为 "证件号码-姓名"
+    let personId, name
+    try {
+      const parts = personFolder.split('-', 2)
+      if (parts.length < 2) {
+        console.warn(`跳过文件夹（格式不正确）: ${personFolder}`)
+        continue
+      }
+      personId = parts[0]
+      name = parts[1]
+    } catch (e) {
+      console.warn(`跳过文件夹 ${personFolder}: ${e.message}`)
+      continue
+    }
+
+    // 读取该文件夹内的所有 Excel 文件
+    const files = fs.readdirSync(personPath)
+    for (const fileName of files) {
+      if (!fileName.endsWith('.xlsx') && !fileName.endsWith('.xls')) continue
+
+      const filePath = path.join(personPath, fileName)
+      try {
+        const rows = readExcelToArray(filePath)
+        // 为每行添加元数据
+        const enrichedRows = rows.map(row => ({
+          ...row,
+          原文件名: fileName,
+          证件号码: personId,
+          姓名备注: name,
+        }))
+        allData.push(...enrichedRows)
+      } catch (e) {
+        console.error(`读取文件失败 ${filePath}:`, e.message)
+      }
+    }
+  }
+
+  console.log(`合并交易文件夹完成，共 ${allData.length} 条记录`)
+  return allData
+}
+
+/**
+ * 检测异常交易
+ * 检测规则：
+ * 1. 交易主体的出入账标识 = "入账"
+ * 2. 交易金额 > minAmount（默认500）
+ * 3. 交易金额是 100 的倍数
+ * 4. 同一组合（证件号码+交易金额+付款支付帐号）只出现 1 次
+ * 5. 同一证件号码+交易金额的组合，不同发送账户数 >= minSenders（默认1）
+ * 
+ * @param {Array<Object>} transactionData - 交易数据数组
+ * @param {Object} options - 配置选项
+ * @param {number} options.minAmount - 最小交易金额（默认500）
+ * @param {number} options.minSenders - 最小发送账户数（默认1）
+ * @returns {Array<Object>} 异常交易列表（按证件号码聚合）
+ */
+function detectAbnormalTransactions(transactionData, options = {}) {
+  const {
+    minAmount = parseInt(process.env.MIN_TRANSACTION_AMOUNT || '500', 10),
+    minSenders = parseInt(process.env.MIN_SENDERS_COUNT || '1', 10),
+  } = options
+
+  if (!transactionData || transactionData.length === 0) {
+    return []
+  }
+
+  // 1. 清理列名（去除空格）
+  const cleaned = transactionData.map(row => {
+    const cleanedRow = {}
+    for (const [key, value] of Object.entries(row)) {
+      cleanedRow[key.trim()] = value
+    }
+    return cleanedRow
+  })
+
+  // 2. 统一列名：付款支付账号 -> 付款支付帐号
+  const normalized = cleaned.map(row => {
+    if (row['付款支付账号'] && !row['付款支付帐号']) {
+      row['付款支付帐号'] = row['付款支付账号']
+      delete row['付款支付账号']
+    }
+    return row
+  })
+
+  // 3. 筛选：只保留"入账"记录
+  const incoming = normalized.filter(
+    row => String(row['交易主体的出入账标识'] || '').trim() === '入账'
+  )
+
+  if (incoming.length === 0) {
+    console.log('没有入账记录')
+    return []
+  }
+
+  // 4. 转换交易金额为数字，并筛选
+  const withAmount = incoming
+    .map(row => {
+      // 处理金额中的逗号（如：1,000）
+      const amountStr = String(row['交易金额'] || '0').replace(/,/g, '')
+      const amount = parseFloat(amountStr)
+      return {
+        ...row,
+        交易金额_数值: isNaN(amount) ? 0 : amount,
+      }
+    })
+    .filter(row => {
+      const amount = row.交易金额_数值
+      // 金额 > minAmount 且是 100 的倍数
+      return amount > minAmount && amount % 100 === 0
+    })
+
+  if (withAmount.length === 0) {
+    console.log('没有符合条件的交易记录')
+    return []
+  }
+
+  // 5. 统计每个组合的出现次数
+  // 组合 = 证件号码 + 交易金额 + 付款支付帐号
+  const countMap = new Map()
+  for (const row of withAmount) {
+    const key = `${row['证件号码']}|${row.交易金额_数值}|${row['付款支付帐号'] || ''}`
+    countMap.set(key, (countMap.get(key) || 0) + 1)
+  }
+
+  // 6. 只保留出现次数为1的组合（确保同一组合只出现一次）
+  const validRows = withAmount.filter(row => {
+    const key = `${row['证件号码']}|${row.交易金额_数值}|${row['付款支付帐号'] || ''}`
+    return countMap.get(key) === 1
+  })
+
+  // 7. 按证件号码+交易金额分组
+  const grouped = new Map()
+  for (const row of validRows) {
+    const groupKey = `${row['证件号码']}|${row.交易金额_数值}`
+    if (!grouped.has(groupKey)) {
+      grouped.set(groupKey, [])
+    }
+    grouped.get(groupKey).push(row)
+  }
+
+  // 8. 检测异常：统计每组的不同发送账户数
+  const abnormal = []
+  for (const [groupKey, groupRows] of grouped.entries()) {
+    const uniqueSenders = new Set()
+    for (const row of groupRows) {
+      const sender = String(row['付款支付帐号'] || '').trim()
+      if (sender) uniqueSenders.add(sender)
+    }
+
+    // 如果不同发送账户数 >= minSenders，则判定为异常
+    if (uniqueSenders.size >= minSenders) {
+      const [personId, amount] = groupKey.split('|')
+      const amountNum = parseFloat(amount)
+
+      // 生成资金备注
+      const beizhuList = []
+      for (const row of groupRows) {
+        const sender = String(row['付款支付帐号'] || '').trim()
+        const time = row['交易时间'] || row['交易时间_dt'] || ''
+        beizhuList.push(`- ${time} 收到来自 ${sender} 的转账`)
+      }
+
+      abnormal.push({
+        证件号码: personId,
+        交易金额: amountNum,
+        可疑发送账户数量: uniqueSenders.size,
+        交易次数: groupRows.length,
+        资金备注: `账户 ${personId} 收：${amountNum}元\n${beizhuList.join('\n')}`,
+      })
+    }
+  }
+
+  // 9. 按证件号码聚合（合并同一人的多条异常记录）
+  const finalMap = new Map()
+  for (const item of abnormal) {
+    const id = item.证件号码
+    if (!finalMap.has(id)) {
+      finalMap.set(id, {
+        证件号码: id,
+        交易金额: 0,
+        可疑发送账户数量: 0,
+        交易次数: 0,
+        资金备注: [],
+      })
+    }
+
+    const existing = finalMap.get(id)
+    existing.交易金额 += item.交易金额
+    existing.可疑发送账户数量 += item.可疑发送账户数量
+    existing.交易次数 += item.交易次数
+    existing.资金备注.push(item.资金备注)
+  }
+
+  // 转换为数组并合并资金备注
+  const final = Array.from(finalMap.values()).map(item => ({
+    ...item,
+    资金备注: item.资金备注.join('\n'),
+  }))
+
+  console.log(`异常交易检测完成，发现 ${final.length} 个可疑账户`)
+  return final
+}
+
+/**
+ * 标记主表中的异常资金
+ * @param {Array<Object>} mainData - 主表数据
+ * @param {Array<Object>} abnormalData - 异常交易数据
+ * @returns {Array<Object>} 标记后的主表数据（添加 异常资金 和 资金备注 字段）
+ */
+function flagAbnormalTransaction(mainData, abnormalData) {
+  if (!mainData || mainData.length === 0) return mainData
+  
+  if (!abnormalData || abnormalData.length === 0) {
+    // 修复：没有异常时，应该设置为 0 而不是空字符串
+    return mainData.map(row => ({
+      ...row,
+      异常资金: 0,
+      资金备注: '',
+    }))
+  }
+
+  // 创建异常数据索引（按证件号码）
+  const abnormalMap = new Map()
+  for (const item of abnormalData) {
+    const id = String(item.证件号码 || '').trim()
+    if (id) {
+      abnormalMap.set(id, item)
+    }
+  }
+
+  // 标记主表
+  return mainData.map(row => {
+    const id = String(row['证件号码'] || '').trim()
+    const abnormal = abnormalMap.get(id)
+
+    if (abnormal) {
+      return {
+        ...row,
+        异常资金: 1,  // 修复：明确设置为 1
+        资金备注: abnormal.资金备注 || '',
+      }
+    } else {
+      return {
+        ...row,
+        异常资金: 0,  // 修复：明确设置为 0
+        资金备注: '',
+      }
+    }
+  })
+}
+
+module.exports = {
+  mergeTransactionFolder,
+  detectAbnormalTransactions,
+  flagAbnormalTransaction
+}
