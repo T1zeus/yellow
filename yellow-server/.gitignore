@@ -4,18 +4,26 @@ node_modules/
 # yarn.lock should be committed if using yarn
 # pnpm-lock.yaml should be committed if using pnpm
 
-# Build outputs
-dist/
-dist-ssr/
-build/
-*.local
-
 # Environment variables
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Data directories (uploads, results, cache)
+data/
+uploads/
+results/
+*.xlsx
+*.xls
+!**/上传模板/*.xlsx
+!**/上传模板/*.xls
+
+# Cache files
+llm_*.json
+*.cache
+.cache/
 
 # Logs
 logs/
@@ -25,6 +33,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
+
+# Build outputs
+dist/
+build/
+*.local
 
 # Editor directories and files
 .vscode/*
@@ -50,4 +63,27 @@ coverage/
 # Temporary files
 *.tmp
 *.temp
-.cache/
+temp/
+tmp/
+
+# Process management
+.pm2/
+*.pid
+*.seed
+*.pid.lock
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
