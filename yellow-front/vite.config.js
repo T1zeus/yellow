@@ -7,21 +7,7 @@ export default defineConfig({
   css: {
     preprocessorOptions: {
       less: {
-        javascriptEnabled: true,
-      },
-    },
-  },
-  server: {
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
-        secure: false,
-      },
-      '/files': {
-        target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
-        secure: false,
+        javascriptEnabled: true, // 这一行通常是为了兼容某些依赖 Less JavaScript 特性的库
       },
     },
   },
