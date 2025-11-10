@@ -200,28 +200,6 @@ function mergeAndResolveConflicts(data1, data2, options = {}) {
     }
   }
 
-  console.log(`合并完成（保留所有行）：${data1.length} + ${data2.length} -> ${merged.length} 条记录`)
-
-  // 调试：统计每个证件号码出现次数
-  const idCountMap = new Map()
-  const suspiciousRows = []
-  for (const row of merged) {
-    const key = String(row[onColumn] || '')
-    if (key) {
-      idCountMap.set(key, (idCountMap.get(key) || 0) + 1)
-      if (key === '310227199002301000') {
-        suspiciousRows.push(row)
-      }
-    }
-  }
-  console.log('合并后证件号码出现次数（前10个）:', Array.from(idCountMap.entries()).slice(0, 10))
-  if (suspiciousRows.length > 0) {
-    console.warn('【调试】检测到证件号 310227199002301000，相关记录如下:')
-    for (const row of suspiciousRows) {
-      console.warn(JSON.stringify(row))
-    }
-  }
-
   return merged
 }
 
@@ -287,8 +265,6 @@ function cleanData(data) {
 
     cleanedRows.push(cleaned)
   }
-  
-  console.log(`cleanData: 原始 ${data.length} 行，保留 ${cleanedRows.length} 行，缺少证件号跳过 ${skippedMissingId} 行，证件号无效跳过 ${skippedInvalidId} 行`)
   
   return cleanedRows
 }
@@ -476,9 +452,6 @@ function processEmploymentData(employmentData) {
     const emp = String(row['从业单位'] || '').trim()
     return emp !== '' && emp !== 'undefined' && emp !== 'null'
   }).length
-  
-  console.log(`从业数据处理完成：${filtered.length} 条记录`)
-  console.log(`- 其中 ${withEmployer} 条记录有从业单位信息`)
 
   // 7. 最后清理证件号码（使用cleanIdNumber统一格式）
   filtered = filtered.map(row => ({
@@ -486,7 +459,6 @@ function processEmploymentData(employmentData) {
     证件号码: cleanIdNumber(row['证件号码']),
   }))
 
-  console.log(`从业数据处理完成：${filtered.length} 条记录`)
   return filtered
 }
 
@@ -556,7 +528,6 @@ function readAndCleanData(filePath) {
       }
     }
   }
-  console.log(`读取文件: ${decodedFileName} - ${cleaned.length} 条记录，唯一证件号 ${idSet.size} 个`)
   if (suspiciousIds.length > 0) {
     console.warn(`【readAndCleanData】检测到可疑证件号: ${JSON.stringify(suspiciousIds.slice(0, 5))}${suspiciousIds.length > 5 ? ' ...' : ''}`)
   }

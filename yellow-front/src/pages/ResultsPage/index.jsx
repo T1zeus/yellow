@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Button, Card, Table, Tag, Drawer, Input, Space,
+import { Button, Card, Table, Tag, Input, Space,
      Select, message, Spin, Modal, Statistic, Row, Col, Tabs } from 'antd';
 import { SearchOutlined, SaveOutlined, WarningOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
@@ -43,11 +43,14 @@ const criminalColumns = [
         title: '简要案情',
         dataIndex: '简要案情',
         key: '简要案情',
-        ellipsis: {
-            showTitle: false,
-        },
+        width: 400,
         render: (text) => (
-            <div style={{ maxWidth: 500 }} title={text}>
+            <div style={{ 
+                whiteSpace: 'pre-wrap', 
+                wordBreak: 'break-word',
+                maxHeight: '200px',
+                overflowY: 'auto'
+            }}>
                 {text || '-'}
             </div>
         ),
@@ -59,9 +62,11 @@ const ResultsPage = () => {
     const [data, setData] = useState([]); // 分析结果数据
     const [filteredData, setFilteredData] = useState([]); // 过滤后的数据
     const [loading, setLoading] = useState(false);
-    const [drawerOpen, setDrawerOpen] = useState(false);
-    const [criminalData, setCriminalData] = useState([]); // 当前查看的前科记录
-    const [currentPerson, setCurrentPerson] = useState(null); // 当前查看的人员信息
+    const [criminalModal, setCriminalModal] = useState({
+        visible: false,
+        data: [],
+        person: null,
+    }); // 前科记录弹窗状态
     const [searchText, setSearchText] = useState('');
     const [riskFilter, setRiskFilter] = useState('all'); // 风险级别筛选
 
@@ -253,10 +258,12 @@ const ResultsPage = () => {
 
     // 用于显示各种详情信息（入住、同住、资金、商品、收货地址、居住详情）
     const showDetailModal = (title, content) => {
+        // 确保内容是字符串，如果为空则显示默认文本
+        const safeContent = content ? String(content) : '暂无相关信息';
         setDetailModal({
             visible: true,
             title,
-            content: content || '暂无相关信息',
+            content: safeContent,
         });
     };
 
@@ -310,8 +317,8 @@ const ResultsPage = () => {
     };
 
 
-    // 显示前科详情抽屉
-    const showCriminalDrawer = (record) => {
+    // 显示前科详情弹窗
+    const showCriminalModal = (record) => {
         // 从当前数据中筛选出该人的前科记录
         // 如果有简要案情，说明有前科
         const criminalRecords = [];
@@ -330,28 +337,31 @@ const ResultsPage = () => {
             String(row['证件号码'] || '').trim() === String(record['证件号码'] || '').trim()
         );
         
+        let records = criminalRecords;
         if (allRecords.length > 1) {
-            const records = allRecords.map((row, idx) => ({
+            records = allRecords.map((row, idx) => ({
                 key: String(idx + 1),
                 index: idx + 1,
                 案发地点: row['案发地点'] || '',
                 地点分类: row['地点分类'] || '',
                 简要案情: row['简要案情'] || '',
             }));
-            setCriminalData(records);
-        } else {
-            setCriminalData(criminalRecords);
         }
 
-        setCurrentPerson(record);
-        setDrawerOpen(true);
+        setCriminalModal({
+            visible: true,
+            data: records,
+            person: record,
+        });
     };
 
-    // 关闭抽屉
-    const closeDrawer = () => {
-        setDrawerOpen(false);
-        setCriminalData([]);
-        setCurrentPerson(null);
+    // 关闭前科记录弹窗
+    const closeCriminalModal = () => {
+        setCriminalModal({
+            visible: false,
+            data: [],
+            person: null,
+        });
     };
 
     // 渲染风险级别标签
@@ -365,46 +375,46 @@ const ResultsPage = () => {
         return <Tag color={config.color}>{level || '低'}</Tag>;
     };
 
-    // 表格列定义
+    // 表格列定义 - 按用户要求的顺序排列
     const columns = [
         {
             title: '序号',
             dataIndex: 'index',
             key: 'index',
-            width: 80,
+            width: 60,
             fixed: 'left',
         },
         {
             title: '姓名',
             dataIndex: '姓名',
             key: '姓名',
-            width: 120,
+            width: 90,
             fixed: 'left',
         },
         {
             title: '证件号码',
             dataIndex: '证件号码',
             key: '证件号码',
-            width: 180,
+            width: 160,
         },
         {
             title: '手机号码',
             dataIndex: '手机号码',
             key: '手机号码',
-            width: 130,
+            width: 110,
         },
         {
             title: '前科次数',
             dataIndex: '前科次数',
             key: '前科次数',
-            width: 100,
+            width: 75,
             sorter: (a, b) => (a['前科次数'] || 0) - (b['前科次数'] || 0),
             render: (count, record) => {
                 const num = parseInt(count || 0, 10);
                 return num > 0 ? (
                     <Button 
                         type="link" 
-                        onClick={() => showCriminalDrawer(record)}
+                        onClick={() => showCriminalModal(record)}
                         style={{ padding: 0 }}
                     >
                         {num}
@@ -415,87 +425,59 @@ const ResultsPage = () => {
             },
         },
         {
-            title: '预警状态',
-            dataIndex: '预警状态',
-            key: '预警状态',
-            width: 100,
-            filters: [
-                { text: '高', value: '高' },
-                { text: '中', value: '中' },
-                { text: '低', value: '低' },
-            ],
-            onFilter: (value, record) => record['预警状态'] === value,
-            render: renderRiskLevel,
-        },
-        {
-            title: '异常购物',
-            dataIndex: '异常购物_等级',
-            key: '异常购物_等级',
-            width: 100,
-            render: (value, record) => {
-                // 如果异常购物为"是"且有商品名称详细，点击显示详情
-                if (value === '是' && record['商品名称详细']) {
-                    return ( 
-                        <Button 
-                            type="link" 
-                            onClick={() => showDetailModal('商品详细信息', record['商品名称详细'])}
-                            style={{ padding: 0, color: '#f50' }}
-                        >
-                            <Tag color="red">是</Tag>
-                        </Button>
-                    );
-                }
-                return <Tag color="green">否</Tag>;
+            title: '前科案发分类',
+            dataIndex: '案由',
+            key: '案由',
+            width: 95,
+            render: (text) => {
+                if (!text) return '-';
+                // 将逗号、顿号、分号等分隔符拆分，让每个分类单独一行显示
+                const categories = String(text)
+                    .split(/[,，、;；]/)
+                    .map(cat => cat.trim())
+                    .filter(cat => cat);
+                
+                if (categories.length === 0) return '-';
+                
+                return (
+                    <div style={{ 
+                        lineHeight: '1.6',
+                        wordBreak: 'break-word'
+                    }}>
+                        {categories.map((cat, index) => (
+                            <div key={index} style={{ 
+                                marginBottom: index < categories.length - 1 ? '4px' : 0
+                            }}>
+                                {cat}
+                            </div>
+                        ))}
+                    </div>
+                );
             },
         },
         {
-            title: '异常资金',
-            dataIndex: '异常资金',
-            key: '异常资金',
-            width: 100,
-            render: (value, record) => {
-                const num = parseInt(value || 0, 10);
-                // ========== 【修改点2：异常资金详情】 ==========
-                // 如果异常资金为1且有资金备注，点击显示详情
-                if (num === 1 && record['资金备注']) {
-                    return (
-                        <Button 
-                            type="link" 
-                            onClick={() => showDetailModal('资金详细信息', record['资金备注'])}
-                            style={{ padding: 0, color: '#f50' }}
-                        >
-                            <Tag color="red">是</Tag>
-                        </Button>
-                    );
-                }
-                return <Tag color="green">否</Tag>;
-            },
+            title: '前科案发地点',
+            dataIndex: '案发地点',
+            key: '案发地点',
+            width: 120,
         },
         {
             title: '户籍地址',
             dataIndex: '户籍地址',
             key: '户籍地址',
-            width: 200,
-            ellipsis: true,
+            width: 120,
         },
         {
             title: '居住地址',
             dataIndex: '居住地址',
             key: '居住地址',
-            width: 200,
-            ellipsis: true,
-        },
-        {
-            title: '所属辖区',
-            dataIndex: '所属辖区',
-            key: '所属辖区',
-            width: 150,
+            width: 120,
         },
         {
             title: '居住情况',
             dataIndex: '居住情况',
             key: '居住情况',
-            width: 100,
+            width: 80,
             render: (text, record) => {
                 // 如果是"同住人"且有居住详细，点击显示详情
                 if (text === '同住人' && record['居住详细']) {
@@ -513,10 +495,92 @@ const ResultsPage = () => {
             },
         },
         {
+            title: '所属辖区',
+            dataIndex: '所属辖区',
+            key: '所属辖区',
+            width: 90,
+        },
+        {
+            title: '从业单位',
+            dataIndex: '从业单位',
+            key: '从业单位',
+            width: 100,
+        },
+        {
+            title: '社保情况',
+            dataIndex: '社保情况',
+            key: '社保情况',
+            width: 90,
+        },
+        {
+            title: '异常购物',
+            dataIndex: '异常购物_等级',
+            key: '异常购物_等级',
+            width: 75,
+            render: (value, record) => {
+                // 如果异常购物为"是"且有商品名称详细，点击显示详情
+                if (value === '是' && record['商品名称详细']) {
+                    return ( 
+                        <Button 
+                            type="link" 
+                            onClick={() => showDetailModal('商品详细信息', record['商品名称详细'])}
+                            style={{ padding: 0, color: '#f50' }}
+                        >
+                            <Tag color="red">是</Tag>
+                        </Button>
+                    );
+                }
+                return <Tag color="green">否</Tag>;
+            },
+        },
+        {
+            title: '收货地址',
+            dataIndex: '收货地址分类',
+            key: '收货地址分类',
+            width: 95,
+            render: (text, record) => {
+                // 如果有收货地址分类且有收货地址详细，点击显示详情
+                if (text && record['收货地址详细']) {
+                    return (
+                        <Button 
+                            type="link" 
+                            onClick={() => showDetailModal('收货详细信息', record['收货地址详细'])}
+                            style={{ padding: 0 }}
+                        >
+                            {text}
+                        </Button>
+                    );
+                }
+                return text || '-';
+            },
+        },
+        {
+            title: '异常资金',
+            dataIndex: '异常资金',
+            key: '异常资金',
+            width: 75,
+            render: (value, record) => {
+                const num = parseInt(value || 0, 10);
+                // 如果异常资金为1且有资金备注，点击显示详情
+                if (num === 1 && record['资金备注']) {
+                    return (
+                        <Button 
+                            type="link" 
+                            onClick={() => showDetailModal('资金详细信息', record['资金备注'])}
+                            style={{ padding: 0, color: '#f50' }}
+                        >
+                            <Tag color="red">是</Tag>
+                        </Button>
+                    );
+                }
+                return <Tag color="green">否</Tag>;
+            },
+        },
+        {
             title: '入住次数',
             dataIndex: '入住次数',
             key: '入住次数',
-            width: 100,
+            width: 70,
             sorter: (a, b) => (a['入住次数'] || 0) - (b['入住次数'] || 0),
             render: (value, record) => {
                 const count = parseInt(value || 0, 10);
@@ -539,7 +603,7 @@ const ResultsPage = () => {
             title: '同住男人数',
             dataIndex: '同住男人数',
             key: '同住男人数',
-            width: 120,
+            width: 85,
             sorter: (a, b) => (a['同住男人数'] || 0) - (b['同住男人数'] || 0),
             render: (value, record) => {
                 const count = parseInt(value || 0, 10);
@@ -559,46 +623,23 @@ const ResultsPage = () => {
             }, 
         },
         {
-            title: '从业单位',
-            dataIndex: '从业单位',
-            key: '从业单位',
-            width: 200,
-            ellipsis: true,
-        },
-        {
-            title: '社保情况',
-            dataIndex: '社保情况',
-            key: '社保情况',
-            width: 150,
-            ellipsis: true,
-        },
-        {
-            title: '收货地址分类',
-            dataIndex: '收货地址分类',
-            key: '收货地址分类',
-            width: 150,
-            render: (text, record) => {
-                // ========== 【修改点6：收货地址详情】 ==========
-                // 如果有收货地址分类且有收货地址详细，点击显示详情
-                if (text && record['收货地址详细']) {
-                    return (
-                        <Button 
-                            type="link" 
-                            onClick={() => showDetailModal('收货详细信息', record['收货地址详细'])}
-                            style={{ padding: 0 }}
-                        >
-                            {text}
-                        </Button>
-                    );
-                }
-                return text || '-';
-            },
+            title: '预警状态',
+            dataIndex: '预警状态',
+            key: '预警状态',
+            width: 80,
+            filters: [
+                { text: '高', value: '高' },
+                { text: '中', value: '中' },
+                { text: '低', value: '低' },
+            ],
+            onFilter: (value, record) => record['预警状态'] === value,
+            render: renderRiskLevel,
         },
         {
             title: '更新时间',
             dataIndex: '更新时间',
             key: '更新时间',
-            width: 120,
+            width: 90,
         },
     ];
 
@@ -735,12 +776,34 @@ const ResultsPage = () => {
             <Card 
                 title={`分析结果 - ${id ? decodeURIComponent(id) : 'result.xlsx'}`}
                 extra={
-                    <Space>
+                    <Space size="middle" style={{ display: 'flex', alignItems: 'center' }}>
+                        {/* 风险统计 - 移到搜索栏同一行 */}
+                        <Space size="small">
+                            <Statistic 
+                                title="高风险" 
+                                value={riskStats.high} 
+                                valueStyle={{ color: '#f50', fontSize: '18px' }}
+                                style={{ marginRight: 0 }}
+                            />
+                            <Statistic 
+                                title="中风险" 
+                                value={riskStats.medium} 
+                                valueStyle={{ color: '#faad14', fontSize: '18px' }}
+                                style={{ marginRight: 0 }}
+                            />
+                            <Statistic 
+                                title="低风险" 
+                                value={riskStats.low} 
+                                valueStyle={{ color: '#87d068', fontSize: '18px' }}
+                                style={{ marginRight: 0 }}
+                            />
+                        </Space>
                         {/* 添加查看高风险地点按钮 */}
                         {showHighRiskTab && (
                             <Button 
                                 icon={<WarningOutlined />}
                                 onClick={() => setActiveTabKey('highRisk')}
+                                size="small"
                             >
                                 查看高风险地点
                             </Button>
@@ -749,6 +812,7 @@ const ResultsPage = () => {
                             value={riskFilter}
                             onChange={setRiskFilter}
                             style={{ width: 120 }}
+                            size="small"
                         >
                             <Select.Option value="all">全部风险</Select.Option>
                             <Select.Option value="高">高风险</Select.Option>
@@ -762,55 +826,35 @@ const ResultsPage = () => {
                             onSearch={setSearchText}
                             onChange={(e) => setSearchText(e.target.value)}
                             enterButton={<SearchOutlined />}
+                            size="small"
                         />
                     </Space>
                 }
             >
-                {/* 添加风险统计显示 */}
-                <Row gutter={16} style={{ marginBottom: 16 }}>
-                    <Col span={8}>
-                        <Statistic 
-                            title="高风险" 
-                            value={riskStats.high} 
-                            valueStyle={{ color: '#f50' }}
-                        />
-                    </Col>
-                    <Col span={8}>
-                        <Statistic 
-                            title="中风险" 
-                            value={riskStats.medium} 
-                            valueStyle={{ color: '#faad14' }}
-                        />
-                    </Col>
-                    <Col span={8}>
-                        <Statistic 
-                            title="低风险" 
-                            value={riskStats.low} 
-                            valueStyle={{ color: '#87d068' }}
-                        />
-                    </Col>
-                </Row>
 
-                {/* 添加标签页切换 */}
+                {/* 添加标签页切换 - 压缩空间 */}
                 <Tabs 
                     defaultActiveKey="result"
                     activeKey={activeTabKey}
                     onChange={(key) => {
                         setActiveTabKey(key);
                     }}
+                    style={{ marginTop: 0 }}
                 >
                     <TabPane tab="分析结果" key="result">
                         <Spin spinning={loading}>
                             <Table 
                                 columns={columns}
                                 dataSource={filteredData}
-                                scroll={{ x: 1800, y: 'calc(100vh - 400px)' }}
+                                scroll={{ x: 1600, y: 'calc(100vh - 280px)' }}
                                 pagination={{
                                     pageSize: 20,
                                     showSizeChanger: true,
                                     showTotal: (total) => `共 ${total} 条记录`,
                                     pageSizeOptions: ['10', '20', '50', '100'],
+                                    size: 'small',
                                 }}
+                                size="small"
                             />
                         </Spin>
                     </TabPane>
@@ -890,52 +934,60 @@ const ResultsPage = () => {
                     ]}
                     width={800}
                 >
-                    <div style={{ 
-                        whiteSpace: 'pre-wrap', 
-                        maxHeight: '60vh', 
-                        overflowY: 'auto',
-                        lineHeight: 1.5,
-                        padding: '10px'
-                    }}>
-                        {detailModal.content}
-                    </div>
+                    <div 
+                        style={{ 
+                            whiteSpace: 'pre-wrap', 
+                            maxHeight: '60vh', 
+                            overflowY: 'auto',
+                            lineHeight: 1.5,
+                            padding: '10px'
+                        }}
+                        dangerouslySetInnerHTML={{ __html: detailModal.content }}
+                    />
                 </Modal>
 
-                {/* 位置21：前科记录抽屉 - 保持不变 */}
-                <Drawer
+                {/* 前科记录弹窗 - 改为全屏Modal，类似异常购物和异常资金 */}
+                <Modal
                     title={
-                        currentPerson 
-                            ? `前科记录 - ${currentPerson['姓名']} (${currentPerson['证件号码']})`
+                        criminalModal.person 
+                            ? `前科记录 - ${criminalModal.person['姓名']} (${criminalModal.person['证件号码']})`
                             : '前科记录'
                     }
-                    onClose={closeDrawer}
-                    open={drawerOpen}
-                    width={1000}
+                    open={criminalModal.visible}
+                    onCancel={closeCriminalModal}
+                    footer={[
+                        <Button key="close" onClick={closeCriminalModal}>关闭</Button>
+                    ]}
+                    width={1200}
+                    style={{ top: 20 }}
                 >
-                    {criminalData.length > 0 ? (
-                        <Table 
-                            columns={criminalColumns} 
-                            dataSource={criminalData}
-                            pagination={false}
-                        />
+                    {criminalModal.data.length > 0 ? (
+                        <div>
+                            <Table 
+                                columns={criminalColumns} 
+                                dataSource={criminalModal.data}
+                                pagination={false}
+                                scroll={{ x: 'max-content' }}
+                            />
+                            
+                            {criminalModal.person && (
+                                <div style={{ marginTop: 24, padding: 16, background: '#f5f5f5', borderRadius: 4 }}>
+                                    <h4>人员信息</h4>
+                                    <p><strong>姓名：</strong>{criminalModal.person['姓名']}</p>
+                                    <p><strong>证件号码：</strong>{criminalModal.person['证件号码']}</p>
+                                    <p><strong>手机号码：</strong>{criminalModal.person['手机号码']}</p>
+                                    <p><strong>居住地址：</strong>{criminalModal.person['居住地址']}</p>
+                                    <p><strong>前科次数：</strong>{criminalModal.person['前科次数'] || 0}</p>
+                                    <p><strong>预警状态：</strong>{renderRiskLevel(criminalModal.person['预警状态'])}</p>
+                                </div>
+                            )}
+                        </div>
                     ) : (
                         <div style={{ textAlign: 'center', padding: '40px 0' }}>
                             暂无前科记录
                         </div>
                     )}
-                    
-                    {currentPerson && (
-                        <div style={{ marginTop: 24, padding: 16, background: '#f5f5f5', borderRadius: 4 }}>
-                            <h4>人员信息</h4>
-                            <p><strong>姓名：</strong>{currentPerson['姓名']}</p>
-                            <p><strong>证件号码：</strong>{currentPerson['证件号码']}</p>
-                            <p><strong>手机号码：</strong>{currentPerson['手机号码']}</p>
-                            <p><strong>居住地址：</strong>{currentPerson['居住地址']}</p>
-                            <p><strong>前科次数：</strong>{currentPerson['前科次数'] || 0}</p>
-                            <p><strong>预警状态：</strong>{renderRiskLevel(currentPerson['预警状态'])}</p>
-                        </div>
-                    )}
-                </Drawer>
+                </Modal>
             </Card>
         </div>
     );

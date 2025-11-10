@@ -86,11 +86,30 @@ const UploadPage = () => {
       const formData = new FormData();
       
       Object.entries(fileList).forEach(([fieldName, files]) => {
-        files.forEach(file => {
+        files.forEach((file, index) => {
           if (file.originFileObj) {
+            const fileName = file.name || file.originFileObj.name || '';
+            // 对于文件夹上传，过滤掉临时文件（以 ~$ 开头的文件）
             if (fieldName === 'transaction_files' || fieldName === 'hotel_files') {
-              const path = file.originFileObj.webkitRelativePath || file.name;
-              formData.append(fieldName, file.originFileObj, path);
+              if (fileName.startsWith('~$')) {
+                // 跳过临时文件，不上传
+                return;
+              }
+              const relativePath = file.originFileObj.webkitRelativePath || file.name;
+              
+              // 将路径信息作为元数据传递（使用唯一字段名，避免覆盖）
+              // 使用索引和文件名的哈希值作为唯一标识，避免特殊字符问题
+              const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 50);
+              const metadataKey = `${fieldName}_metadata_${index}_${safeFileName}`;
+              formData.append(metadataKey, JSON.stringify({
+                index: index,
+                path: relativePath,
+                name: fileName,
+                fieldName: fieldName
+              }));
+              
+              // 上传文件
+              formData.append(fieldName, file.originFileObj);
             } else {
               formData.append(fieldName, file.originFileObj);
             }
@@ -112,7 +131,18 @@ const UploadPage = () => {
   const handleFileChange = (fieldName) => (info) => {
     let newFileList = [...info.fileList];
     
-    if (fieldName !== 'transaction_files' && fieldName !== 'hotel_files') {
+    // 对于文件夹上传，过滤掉 Excel 临时文件（以 ~$ 开头的文件）
+    if (fieldName === 'transaction_files' || fieldName === 'hotel_files') {
+      newFileList = newFileList.filter(file => {
+        const fileName = file.name || file.originFileObj?.name || '';
+        // 过滤掉临时文件（以 ~$ 开头的文件）
+        if (fileName.startsWith('~$')) {
+          return false;
+        }
+        return true;
+      });
+    } else {
+      // 普通文件，只保留最后一个
       newFileList = newFileList.slice(-1);
     }
 
@@ -130,6 +160,13 @@ const UploadPage = () => {
   };
 
   const beforeUpload = (file, fieldName) => {
+    // 对于文件夹上传，过滤掉临时文件
+    if (fieldName === 'transaction_files' || fieldName === 'hotel_files') {
+      if (file.name.startsWith('~$')) {
+        return Upload.LIST_IGNORE; // 忽略临时文件
+      }
+    }
+    
     const isExcel = file.name.endsWith('.xlsx') || file.name.endsWith('.xls');
     if (!isExcel && fieldName !== 'transaction_files' && fieldName !== 'hotel_files') {
       message.error('只能上传 Excel 文件！');

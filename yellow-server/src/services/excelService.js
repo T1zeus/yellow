@@ -17,7 +17,7 @@ function readExcelToArray(filePath) {
 }
 
 // 将数组写入 Excel 文件
-function writeArrayToExcel(rows, outPath) {
+function writeArrayToExcel(rows, outPath, options = {}) {
   if (!rows || rows.length === 0) {
     rows = []
   }
@@ -26,9 +26,19 @@ function writeArrayToExcel(rows, outPath) {
   const numericColumns = ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
   const textColumns = ['证件号码']
   
+  // 需要排除的字段（主表字段，不应该出现在某些导出文件中）
+  const excludeFields = options.excludeFields || []
+  
   // 处理数据，确保数字字段保持为数字类型；文本字段保持为字符串
   const processedRows = rows.map(row => {
-    const processedRow = { ...row }
+    const processedRow = {}
+    
+    // 只保留需要的字段，排除不需要的字段
+    for (const key in row) {
+      if (!excludeFields.includes(key)) {
+        processedRow[key] = row[key]
+      }
+    }
 
     // 先处理文本字段，确保不会被 Excel 自动转换
     for (const col of textColumns) {
@@ -42,7 +52,7 @@ function writeArrayToExcel(rows, outPath) {
       }
     }
 
-    // 再处理数字字段
+    // 再处理数字字段（只处理存在的字段，不自动添加）
     for (const col of numericColumns) {
       if (processedRow[col] !== undefined && processedRow[col] !== null) {
         const val = processedRow[col]
@@ -57,10 +67,8 @@ function writeArrayToExcel(rows, outPath) {
           // 已经是数字，确保不是 NaN
           processedRow[col] = isNaN(val) ? 0 : val
         }
-      } else {
-        // 如果字段不存在或为 null，设置为 0
-        processedRow[col] = 0
       }
+      // 注意：不再自动添加不存在的字段
     }
     return processedRow
   })

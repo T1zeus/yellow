@@ -1,14 +1,17 @@
-const { readAndCleanData, 
+const { 
+        cleanIdNumber,
+        readAndCleanData, 
         mergeData, 
         calculateCriminalInfo, 
         mergeCriminalInfo,
         processEmploymentData,
         calculateEmploymentUnit2
     } = require('./dataMergeService')
-const { 
-  mergeTransactionFolder, 
-  detectAbnormalTransactions, 
-  flagAbnormalTransaction 
+const {
+  mergeTransactionFolder,
+  detectAbnormalTransactions,
+  flagAbnormalTransaction,
+  enrichTransactionWithIdNumber
 } = require('./transactionService')
 const { processShoppingData } = require('./shoppingService')
 const { processingHotel, mergeHotelData } = require('./hotelService')
@@ -174,28 +177,97 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       transactionData = mergeTransactionFolder(transactionFolderPath)
       
       if (transactionData.length > 0) {
+        // ========== 【新增】对交易数据按时间排序（与 antiporn 逻辑一致） ==========
+        console.log('开始处理交易时间并排序...')
+        transactionData = transactionData.map(row => {
+          const timeStr = String(row['交易时间'] || '').trim()
+          let timeDt = null
+          
+          if (timeStr) {
+            try {
+              // 尝试解析各种时间格式
+              // 支持格式：YYYY-MM-DD HH:mm:ss, YYYY/MM/DD, 等
+              const parsedDate = new Date(timeStr)
+              if (!isNaN(parsedDate.getTime())) {
+                timeDt = parsedDate
+              }
+            } catch (e) {
+              // 解析失败，保持为 null
+            }
+          }
+          
+          return {
+            ...row,
+            交易时间_dt: timeDt
+          }
+        })
+        
+        // 按时间降序排序（最新的在前，与 antiporn 一致）
+        transactionData.sort((a, b) => {
+          const timeA = a.交易时间_dt
+          const timeB = b.交易时间_dt
+          
+          // 如果都没有时间，保持原顺序
+          if (!timeA && !timeB) return 0
+          // 没有时间的排在后面
+          if (!timeA) return 1
+          if (!timeB) return -1
+          // 降序排序（最新的在前）
+          return timeB.getTime() - timeA.getTime()
+        })
+        
+        console.log(`交易数据排序完成，共 ${transactionData.length} 条记录`)
+        // ========== 【新增结束】 ==========
+        
+        // ========== 【新增】通过主表数据补充交易数据中的证件号码 ==========
+        // 检查是否有缺少证件号码的交易记录
+        const missingIdCount = transactionData.filter(row => {
+          const id = cleanIdNumber(row['证件号码'] || '')
+          return !id || id === ''
+        }).length
+        
+        if (missingIdCount > 0 && mergedData.length > 0) {
+          console.log(`发现 ${missingIdCount} 条交易记录缺少证件号码，尝试通过支付账号匹配...`)
+          transactionData = enrichTransactionWithIdNumber(transactionData, mergedData)
+        }
+        // ========== 【新增结束】 ==========
+        
         // 检测异常交易（但不立即标记到主表）
         abnormalTransactions = detectAbnormalTransactions(transactionData, {
           minAmount: 500,
           minSenders: 1
         })
-        
-        // 导出交易文件
-        const transactionOutputPath = path.join(RESULT_DIR, 'transactions.xlsx')
-        writeArrayToExcel(transactionData, transactionOutputPath)
-        console.log(`交易文件已导出: ${transactionData.length} 条记录`)
-        
-        // 导出异常交易文件
-        if (abnormalTransactions.length > 0) {
-          const abnormalOutputPath = path.join(RESULT_DIR, '可疑收款账号.xlsx')
-          writeArrayToExcel(abnormalTransactions, abnormalOutputPath)
-          console.log(`异常交易文件已导出: ${abnormalTransactions.length} 个可疑账户`)
-        }
       } else {
         console.log('交易数据为空')
       }
+      
+      // 修复：无论是否有数据，都导出交易文件（与 antiporn 一致）
+      const transactionOutputPath = path.join(RESULT_DIR, 'transactions.xlsx')
+      writeArrayToExcel(transactionData, transactionOutputPath, {
+        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
+      })
+      console.log(`交易文件已导出: ${transactionData.length} 条记录`)
+      
+      // 导出异常交易文件（即使为空也导出，与 antiporn 一致）
+      const abnormalOutputPath = path.join(RESULT_DIR, '可疑收款账号.xlsx')
+      writeArrayToExcel(abnormalTransactions, abnormalOutputPath, {
+        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
+      })
+      console.log(`异常交易文件已导出: ${abnormalTransactions.length} 个可疑账户`)
     } else {
       console.log('未上传交易文件夹')
+      // 修复：即使没有上传交易文件夹，也导出空文件（与 antiporn 一致）
+      const transactionOutputPath = path.join(RESULT_DIR, 'transactions.xlsx')
+      writeArrayToExcel([], transactionOutputPath, {
+        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
+      })
+      console.log('交易文件已导出: 0 条记录（空文件）')
+      
+      const abnormalOutputPath = path.join(RESULT_DIR, '可疑收款账号.xlsx')
+      writeArrayToExcel([], abnormalOutputPath, {
+        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
+      })
+      console.log('异常交易文件已导出: 0 个可疑账户（空文件）')
     }
     
     updateProgress(1, 1, 20, 30)
@@ -217,7 +289,9 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
         
         // 导出完整购物数据
         const shoppingOutputPath = path.join(RESULT_DIR, 'shopping.xlsx')
-        writeArrayToExcel(shoppingResult.allShoppingData, shoppingOutputPath)
+        writeArrayToExcel(shoppingResult.allShoppingData, shoppingOutputPath, {
+          excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
+        })
         console.log(`购物文件已导出: ${shoppingResult.allShoppingData.length} 条记录`)
         
         groupedSensitiveData = shoppingResult.groupedSensitiveData
@@ -566,7 +640,9 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
     
     if (hotSpotsData.length > 0) {
       const hotSpotsPath = path.join(RESULT_DIR, '高风险地点统计.xlsx')
-      writeArrayToExcel(hotSpotsData, hotSpotsPath)
+      writeArrayToExcel(hotSpotsData, hotSpotsPath, {
+        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
+      })
       console.log(`案发地点统计已导出: ${hotSpotsData.length} 条记录`)
     } else {
       console.log('案发地点统计为空')
@@ -583,7 +659,9 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
     
     if (populationSpotsData.length > 0) {
       const populationSpotsPath = path.join(RESULT_DIR, '实口地址高风险统计.xlsx')
-      writeArrayToExcel(populationSpotsData, populationSpotsPath)
+      writeArrayToExcel(populationSpotsData, populationSpotsPath, {
+        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
+      })
       console.log(`实口居住地址统计已导出: ${populationSpotsData.length} 条记录`)
     } else {
       console.log('实口居住地址统计为空')
@@ -600,17 +678,16 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
         addressCol: '收货地址',
         threshold: 2
       })
-      
-      if (shoppingSpotsData.length > 0) {
-        const shoppingSpotsPath = path.join(RESULT_DIR, '外卖收货地址高风险统计.xlsx')
-        writeArrayToExcel(shoppingSpotsData, shoppingSpotsPath)
-        console.log(`外卖收货地址统计已导出: ${shoppingSpotsData.length} 条记录`)
-      } else {
-        console.log('外卖收货地址统计为空')
-      }
     } else {
-      console.log('没有购物数据，跳过外卖收货地址统计')
+      console.log('没有购物数据，使用空数据')
     }
+    
+    // 修复：无论是否有数据，都导出外卖收货地址统计文件（与 antiporn 一致）
+    const shoppingSpotsPath = path.join(RESULT_DIR, '外卖收货地址高风险统计.xlsx')
+    writeArrayToExcel(shoppingSpotsData, shoppingSpotsPath, {
+      excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
+    })
+    console.log(`外卖收货地址统计已导出: ${shoppingSpotsData.length} 条记录`)
 
     updateProgress(1, 1, 90, 95)
     

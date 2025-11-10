@@ -72,11 +72,13 @@ function analyzeHotSpots(data, options = {}) {
     return []
   }
 
-  // 过滤和清理数据
+  // 过滤和清理数据 - 只保留需要的字段，避免包含主表的所有字段
   const workingData = data
     .map(row => ({
-      ...row,
+      证件号码: String(row['证件号码'] || '').trim(),
+      姓名: String(row['姓名'] || '').trim(),
       [column]: String(row[column] || '').trim(),
+      实口所属派出所: row['实口所属派出所'] ? String(row['实口所属派出所'] || '').trim() : undefined,
     }))
     .filter(row => {
       const value = row[column]
@@ -88,10 +90,10 @@ function analyzeHotSpots(data, options = {}) {
   }
 
   // 处理所属辖区（如果存在实口所属派出所）
-  if ('实口所属派出所' in workingData[0] && !('所属辖区' in workingData[0])) {
+  if (workingData[0].实口所属派出所 !== undefined && !('所属辖区' in workingData[0])) {
     workingData.forEach(row => {
-      if (row['实口所属派出所']) {
-        row['所属辖区'] = String(row['实口所属派出所']).replace(/.*分局/, '').trim()
+      if (row.实口所属派出所) {
+        row['所属辖区'] = String(row.实口所属派出所).replace(/.*分局/, '').trim()
       } else {
         row['所属辖区'] = ''
       }
@@ -198,20 +200,22 @@ function analyzePopulationHotSpots(data, options = {}) {
     return []
   }
 
-  // 预处理数据
+  // 预处理数据 - 只保留需要的字段，避免包含主表的所有字段
   const processedData = data.map(row => {
     const originalAddr = String(row[addressCol] || row['实口居住地址'] || '').trim()
     const processedAddr = preprocessAddress(originalAddr)
 
     return {
-      ...row,
+      证件号码: String(row['证件号码'] || '').trim(),
+      姓名: String(row['姓名'] || '').trim(),
       原始居住地址: originalAddr,
       [addressCol]: processedAddr,
+      实口所属派出所: row['实口所属派出所'] ? String(row['实口所属派出所'] || '').trim() : undefined,
     }
   }).filter(row => row[addressCol] !== '')
 
   // 判断是否有"实口所属派出所"
-  const hasStation = processedData.length > 0 && '实口所属派出所' in processedData[0]
+  const hasStation = processedData.length > 0 && processedData[0].实口所属派出所 !== undefined
 
   // 去重：同一人同一地址只算一次
   const uniqueMap = new Map()
@@ -339,9 +343,10 @@ function analyzeShoppingSpots(shoppingData, options = {}) {
     return []
   }
 
-  // 预处理数据：移除最后括号，去重
+  // 预处理数据：移除最后括号，去重 - 只保留需要的字段，避免包含主表的所有字段
   const processedData = shoppingData.map(row => ({
-    ...row,
+    证件号码: String(row['证件号码'] || '').trim(),
+    姓名: String(row['姓名'] || '').trim(),
     原始收货地址: String(row[addressCol] || '').trim(),
     [addressCol]: removeLastBracket(row[addressCol]),
   })).filter(row => row[addressCol] !== '')

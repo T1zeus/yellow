@@ -1,10 +1,13 @@
 const fs = require('fs')
 const path = require('path')
 const { readExcelToArray, writeArrayToExcel } = require('./excelService')
+const { cleanIdNumber } = require('./dataMergeService')
 
 /**
  * 合并交易文件夹，生成汇总数据
- * 交易文件夹结构：transaction/证件号码-姓名/xxx.xlsx
+ * 支持两种文件夹结构：
+ * 1. transaction/证件号码-姓名/xxx.xlsx（子文件夹结构）
+ * 2. transaction/xxx.xlsx（直接文件结构，从文件内容中提取证件号码）
  * @param {string} folderPath - 交易文件夹路径
  * @returns {Array<Object>} 合并后的交易数据数组
  */
@@ -16,52 +19,187 @@ function mergeTransactionFolder(folderPath) {
 
   const allData = []
   const items = fs.readdirSync(folderPath, { withFileTypes: true })
+  
+  // 调试：显示文件夹内容
+  console.log(`交易文件夹路径: ${folderPath}`)
+  console.log(`文件夹内容: ${items.map(item => `${item.isDirectory() ? '[目录]' : '[文件]'} ${item.name}`).join(', ')}`)
+  
+  // 检查是否有子文件夹
+  const hasSubFolders = items.some(item => item.isDirectory())
+  
+  if (hasSubFolders) {
+    // 结构1：子文件夹结构（证件号码-姓名/xxx.xlsx）
+    console.log('检测到子文件夹结构，按证件号码-姓名格式处理...')
+    for (const item of items) {
+      if (!item.isDirectory()) continue
 
-  for (const item of items) {
-    if (!item.isDirectory()) continue
+      const personFolder = item.name
+      const personPath = path.join(folderPath, personFolder)
 
-    const personFolder = item.name
-    const personPath = path.join(folderPath, personFolder)
-
-    // 解析文件夹名：格式为 "证件号码-姓名"
-    let personId, name
-    try {
-      const parts = personFolder.split('-', 2)
-      if (parts.length < 2) {
-        console.warn(`跳过文件夹（格式不正确）: ${personFolder}`)
+      // 解析文件夹名：格式为 "证件号码-姓名"
+      let personId, name
+      try {
+        const parts = personFolder.split('-', 2)
+        if (parts.length < 2) {
+          console.warn(`跳过文件夹（格式不正确）: ${personFolder}`)
+          continue
+        }
+        personId = parts[0]
+        name = parts[1]
+      } catch (e) {
+        console.warn(`跳过文件夹 ${personFolder}: ${e.message}`)
         continue
       }
-      personId = parts[0]
-      name = parts[1]
-    } catch (e) {
-      console.warn(`跳过文件夹 ${personFolder}: ${e.message}`)
-      continue
-    }
 
-    // 读取该文件夹内的所有 Excel 文件
-    const files = fs.readdirSync(personPath)
-    for (const fileName of files) {
+      // 读取该文件夹内的所有 Excel 文件
+      const files = fs.readdirSync(personPath)
+      for (const fileName of files) {
+        if (!fileName.endsWith('.xlsx') && !fileName.endsWith('.xls')) continue
+
+        const filePath = path.join(personPath, fileName)
+        try {
+          const rows = readExcelToArray(filePath)
+          // 为每行添加元数据
+          const enrichedRows = rows.map(row => ({
+            ...row,
+            原文件名: fileName,
+            证件号码: personId,
+            姓名备注: name,
+          }))
+          allData.push(...enrichedRows)
+        } catch (e) {
+          console.error(`读取文件失败 ${filePath}:`, e.message)
+        }
+      }
+    }
+  } else {
+    // 结构2：直接文件结构（transaction/xxx.xlsx）
+    console.log('检测到直接文件结构，从文件内容中提取证件号码...')
+    let fileCount = 0
+    let totalRows = 0
+    
+    for (const item of items) {
+      if (item.isDirectory()) continue
+      
+      const fileName = item.name
       if (!fileName.endsWith('.xlsx') && !fileName.endsWith('.xls')) continue
 
-      const filePath = path.join(personPath, fileName)
+      const filePath = path.join(folderPath, fileName)
       try {
         const rows = readExcelToArray(filePath)
-        // 为每行添加元数据
-        const enrichedRows = rows.map(row => ({
-          ...row,
-          原文件名: fileName,
-          证件号码: personId,
-          姓名备注: name,
-        }))
+        
+        // 从文件内容中提取证件号码（如果文件中已有证件号码字段，则使用；否则尝试从文件名或其他字段提取）
+        const enrichedRows = rows.map(row => {
+          // 如果文件中已有证件号码字段，使用它；否则尝试从其他字段提取
+          let personId = row['证件号码'] || row['交易主体证件号码'] || row['收款人证件号码'] || row['证件号'] || ''
+          personId = cleanIdNumber(personId || '')
+          
+          return {
+            ...row,
+            原文件名: fileName,
+            证件号码: personId,
+            姓名备注: row['姓名'] || row['交易主体姓名'] || row['收款人姓名'] || '',
+          }
+        })
+        
         allData.push(...enrichedRows)
+        fileCount++
+        totalRows += enrichedRows.length
       } catch (e) {
         console.error(`读取文件失败 ${filePath}:`, e.message)
       }
     }
+    
+    console.log(`直接文件结构处理完成: ${fileCount} 个文件，共 ${totalRows} 条记录`)
   }
 
   console.log(`合并交易文件夹完成，共 ${allData.length} 条记录`)
   return allData
+}
+
+/**
+ * 通过支付账号匹配补充交易数据中的证件号码
+ * @param {Array<Object>} transactionData - 交易数据（可能缺少证件号码）
+ * @param {Array<Object>} mainData - 主表数据（包含证件号码和可能的支付账号字段）
+ * @returns {Array<Object>} 补充了证件号码的交易数据
+ */
+function enrichTransactionWithIdNumber(transactionData, mainData) {
+  if (!transactionData || transactionData.length === 0) {
+    return transactionData
+  }
+  
+  if (!mainData || mainData.length === 0) {
+    console.warn('主表数据为空，无法通过支付账号匹配证件号码')
+    return transactionData
+  }
+  
+  // 创建主表的支付账号到证件号码的映射
+  // 尝试多个可能的字段名
+  const accountToIdMap = new Map()
+  for (const row of mainData) {
+    const id = cleanIdNumber(row['证件号码'] || '')
+    if (!id) continue
+    
+    // 尝试从多个可能的字段中获取支付账号
+    const possibleAccountFields = [
+      '支付账号', '支付帐号', '收款支付帐号', '付款支付帐号',
+      '微信支付账号', '支付宝账号', '手机号码' // 手机号码也可能用于匹配
+    ]
+    
+    for (const field of possibleAccountFields) {
+      const account = String(row[field] || '').trim()
+      if (account) {
+        // 如果该账号还没有映射，或者当前证件号码更有效（优先使用有证件号码的记录）
+        if (!accountToIdMap.has(account) || !accountToIdMap.get(account)) {
+          accountToIdMap.set(account, id)
+        }
+      }
+    }
+  }
+  
+  console.log(`创建支付账号映射: ${accountToIdMap.size} 个账号`)
+  
+  // 为交易数据补充证件号码
+  let matchedCount = 0
+  const enrichedData = transactionData.map(row => {
+    // 如果已经有证件号码，直接返回
+    const existingId = cleanIdNumber(row['证件号码'] || '')
+    if (existingId) {
+      return row
+    }
+    
+    // 尝试通过收款支付帐号匹配
+    const receiveAccount = String(row['收款支付帐号'] || '').trim()
+    if (receiveAccount && accountToIdMap.has(receiveAccount)) {
+      matchedCount++
+      return {
+        ...row,
+        证件号码: accountToIdMap.get(receiveAccount)
+      }
+    }
+    
+    // 如果收款支付帐号匹配失败，尝试付款支付帐号（虽然不太可能，但尝试一下）
+    const payAccount = String(row['付款支付帐号'] || '').trim()
+    if (payAccount && accountToIdMap.has(payAccount)) {
+      matchedCount++
+      return {
+        ...row,
+        证件号码: accountToIdMap.get(payAccount)
+      }
+    }
+    
+    return row
+  })
+  
+  const totalRows = enrichedData.length
+  const validIdCount = enrichedData.filter(row => {
+    const id = cleanIdNumber(row['证件号码'] || '')
+    return id && id !== ''
+  }).length
+  
+  console.log(`支付账号匹配完成: ${totalRows} 条记录，${matchedCount} 条通过支付账号匹配，${validIdCount} 条有有效证件号码`)
+  
+  return enrichedData
 }
 
 /**
@@ -139,24 +277,30 @@ function detectAbnormalTransactions(transactionData, options = {}) {
     return []
   }
 
-  // 5. 统计每个组合的出现次数
+  // 5. 统计每个组合的出现次数（清理证件号码）
   // 组合 = 证件号码 + 交易金额 + 付款支付帐号
   const countMap = new Map()
   for (const row of withAmount) {
-    const key = `${row['证件号码']}|${row.交易金额_数值}|${row['付款支付帐号'] || ''}`
+    const cleanedId = cleanIdNumber(row['证件号码'] || '')
+    if (!cleanedId) continue  // 跳过无效证件号码
+    const key = `${cleanedId}|${row.交易金额_数值}|${row['付款支付帐号'] || ''}`
     countMap.set(key, (countMap.get(key) || 0) + 1)
   }
 
   // 6. 只保留出现次数为1的组合（确保同一组合只出现一次）
   const validRows = withAmount.filter(row => {
-    const key = `${row['证件号码']}|${row.交易金额_数值}|${row['付款支付帐号'] || ''}`
+    const cleanedId = cleanIdNumber(row['证件号码'] || '')
+    if (!cleanedId) return false  // 跳过无效证件号码
+    const key = `${cleanedId}|${row.交易金额_数值}|${row['付款支付帐号'] || ''}`
     return countMap.get(key) === 1
   })
 
-  // 7. 按证件号码+交易金额分组
+  // 7. 按证件号码+交易金额分组（清理证件号码）
   const grouped = new Map()
   for (const row of validRows) {
-    const groupKey = `${row['证件号码']}|${row.交易金额_数值}`
+    const cleanedId = cleanIdNumber(row['证件号码'] || '')
+    if (!cleanedId) continue  // 跳过无效证件号码
+    const groupKey = `${cleanedId}|${row.交易金额_数值}`
     if (!grouped.has(groupKey)) {
       grouped.set(groupKey, [])
     }
@@ -181,12 +325,29 @@ function detectAbnormalTransactions(transactionData, options = {}) {
       const beizhuList = []
       for (const row of groupRows) {
         const sender = String(row['付款支付帐号'] || '').trim()
-        const time = row['交易时间'] || row['交易时间_dt'] || ''
+        // 优先使用交易时间，如果没有则使用交易时间_dt（如果已转换为字符串）
+        let time = row['交易时间'] || ''
+        if (!time && row['交易时间_dt']) {
+          // 如果交易时间_dt 是 Date 对象，格式化为字符串
+          if (row['交易时间_dt'] instanceof Date) {
+            time = row['交易时间_dt'].toLocaleString('zh-CN', {
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit',
+              hour12: false
+            })
+          } else {
+            time = String(row['交易时间_dt'] || '')
+          }
+        }
         beizhuList.push(`- ${time} 收到来自 ${sender} 的转账`)
       }
 
       abnormal.push({
-        证件号码: personId,
+        证件号码: personId,  // 已经是清理后的格式
         交易金额: amountNum,
         可疑发送账户数量: uniqueSenders.size,
         交易次数: groupRows.length,
@@ -216,10 +377,10 @@ function detectAbnormalTransactions(transactionData, options = {}) {
     existing.资金备注.push(item.资金备注)
   }
 
-  // 转换为数组并合并资金备注
+  // 转换为数组并合并资金备注（使用换行符连接，与 antiporn 一致）
   const final = Array.from(finalMap.values()).map(item => ({
     ...item,
-    资金备注: item.资金备注.join('\n'),
+    资金备注: item.资金备注.join('\n'),  // 使用换行符连接，与 antiporn 的 '\n'.join 一致
   }))
 
   console.log(`异常交易检测完成，发现 ${final.length} 个可疑账户`)
@@ -244,18 +405,18 @@ function flagAbnormalTransaction(mainData, abnormalData) {
     }))
   }
 
-  // 创建异常数据索引（按证件号码）
+  // 创建异常数据索引（按证件号码）- 使用 cleanIdNumber 统一格式
   const abnormalMap = new Map()
   for (const item of abnormalData) {
-    const id = String(item.证件号码 || '').trim()
+    const id = cleanIdNumber(item.证件号码 || '')
     if (id) {
       abnormalMap.set(id, item)
     }
   }
 
-  // 标记主表
+  // 标记主表 - 使用 cleanIdNumber 统一格式
   return mainData.map(row => {
-    const id = String(row['证件号码'] || '').trim()
+    const id = cleanIdNumber(row['证件号码'] || '')
     const abnormal = abnormalMap.get(id)
 
     if (abnormal) {
@@ -276,6 +437,7 @@ function flagAbnormalTransaction(mainData, abnormalData) {
 
 module.exports = {
   mergeTransactionFolder,
+  enrichTransactionWithIdNumber,
   detectAbnormalTransactions,
   flagAbnormalTransaction
 }

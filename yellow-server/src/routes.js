@@ -77,25 +77,12 @@ const storage = multer.diskStorage({
     const fieldname = file.fieldname
     
     // 交易和酒店文件夹需要保持目录结构
+    // 注意：路径信息通过元数据传递，这里先保存到临时位置，后续会移动到正确位置
     if (fieldname === 'transaction_files' || fieldname === 'hotel_files') {
-      // 从文件路径中提取相对路径（webkitRelativePath 或 originalname）
-      // 修复：正确解码文件名
-      let decodedName = decodeFileName(file.originalname)
-      const relativePath = (decodedName || '').replace(/\\/g, '/')
-      const parts = relativePath.split('/')
-      
-      // 第一个部分是文件夹名，后面的部分是相对路径
-      if (parts.length > 1) {
-        const folderName = parts[0]
-        const targetDir = path.join(UPLOAD_DIR, fieldname === 'transaction_files' ? 'transaction' : 'hotel', folderName)
-        fs.mkdirSync(targetDir, { recursive: true })
-        cb(null, targetDir)
-      } else {
-        // 单文件，直接保存到对应文件夹
-        const targetDir = path.join(UPLOAD_DIR, fieldname === 'transaction_files' ? 'transaction' : 'hotel')
-        fs.mkdirSync(targetDir, { recursive: true })
-        cb(null, targetDir)
-      }
+      // 先保存到对应文件夹的临时位置
+      const targetDir = path.join(UPLOAD_DIR, fieldname === 'transaction_files' ? 'transaction' : 'hotel')
+      fs.mkdirSync(targetDir, { recursive: true })
+      cb(null, targetDir)
     } else {
       // 普通文件，保存到 uploads 根目录
       cb(null, UPLOAD_DIR)
@@ -107,22 +94,9 @@ const storage = multer.diskStorage({
     // 修复：正确解码文件名
     let decodedName = decodeFileName(file.originalname)
     
-    // 对于文件夹上传，保持相对路径结构
-    if (fieldname === 'transaction_files' || fieldname === 'hotel_files') {
-      const relativePath = (decodedName || '').replace(/\\/g, '/')
-      const parts = relativePath.split('/')
-      
-      if (parts.length > 1) {
-        // 去掉第一个部分（文件夹名），保留后续路径
-        const filePath = parts.slice(1).join('/')
-        cb(null, filePath)
-      } else {
-        cb(null, decodedName)
-      }
-    } else {
-      // 普通文件，使用解码后的文件名
-      cb(null, decodedName)
-    }
+    // 对于文件夹上传，先使用原始文件名保存（后续会根据元数据移动到正确位置）
+    // 普通文件，使用解码后的文件名
+    cb(null, decodedName)
   }
 })
 
@@ -136,15 +110,117 @@ router.post('/upload', upload.any(), async (req, res) => {
     progressStore.reset()
     progressStore.set(1, '') // 开始处理
 
+    // 收集文件路径元数据（从请求体中获取）
+    // 注意：multer 会将非文件字段放在 req.body 中
+    const pathMetadata = {}
+    
+    Object.keys(req.body || {}).forEach(key => {
+      // 匹配格式：fieldName_metadata_index_filename 或 fieldName_metadata
+      if (key.includes('_metadata')) {
+        // 提取字段名（去掉 _metadata 及其后面的部分）
+        const match = key.match(/^(.+?)_metadata/)
+        if (match) {
+          const fieldName = match[1]
+          if (!pathMetadata[fieldName]) {
+            pathMetadata[fieldName] = []
+          }
+          try {
+            const metadata = JSON.parse(req.body[key])
+            // 确保 metadata 包含 fieldName（如果前端没有传递）
+            if (!metadata.fieldName) {
+              metadata.fieldName = fieldName
+            }
+            pathMetadata[fieldName].push(metadata)
+          } catch (e) {
+            console.error(`解析路径元数据失败 ${key}:`, e)
+          }
+        }
+      }
+    })
+
     // 收集文件路径映射（按字段名）
     const fileMap = new Map()
-    
-    // 处理所有上传的文件
+
+    // 处理文件，匹配路径信息并移动到正确位置
     for (const f of req.files || []) {
       const fieldname = f.fieldname
       
       // 交易和酒店文件需要特殊处理（保存文件夹路径）
       if (fieldname === 'transaction_files' || fieldname === 'hotel_files') {
+        // 解码文件名（处理编码问题）
+        const decodedOriginalName = decodeFileName(f.originalname)
+        
+        // 查找对应的路径信息（通过文件名匹配）
+        const metadataList = pathMetadata[fieldname] || []
+        const metadata = metadataList.find(m => {
+          // 从路径中提取文件名进行匹配
+          const pathParts = (m.path || '').split('/')
+          const pathFileName = pathParts[pathParts.length - 1]
+          
+          // 尝试多种匹配方式（处理编码问题）
+          const nameMatch = m.name === f.originalname || 
+                           m.name === decodedOriginalName ||
+                           pathFileName === f.originalname ||
+                           pathFileName === decodedOriginalName
+          
+          // 如果精确匹配失败，尝试模糊匹配（去掉特殊字符后比较）
+          if (!nameMatch) {
+            const normalize = (str) => str.replace(/[^\w\u4e00-\u9fa5]/g, '').toLowerCase()
+            return normalize(m.name) === normalize(decodedOriginalName) ||
+                   normalize(pathFileName) === normalize(decodedOriginalName)
+          }
+          
+          return nameMatch
+        })
+        
+        if (metadata && metadata.path) {
+          // 处理路径：去掉第一个部分（最外层文件夹名），保留后续路径
+          const relativePath = metadata.path.replace(/\\/g, '/')
+          const parts = relativePath.split('/')
+          
+          if (parts.length > 1) {
+            // 对于交易文件，保留子文件夹结构（证件号码-姓名/xxx.xlsx）
+            // 对于酒店文件，是直接文件结构（只有文件夹名/文件名），直接保存文件名
+            let filePath
+            if (fieldname === 'transaction_files' && parts.length > 2) {
+              // 交易文件：去掉第一个部分，保留子文件夹结构
+              filePath = parts.slice(1).join('/')
+            } else {
+              // 酒店文件或其他单层结构：只保留文件名
+              filePath = parts[parts.length - 1]
+            }
+            
+            const targetDir = path.join(UPLOAD_DIR, fieldname === 'transaction_files' ? 'transaction' : 'hotel')
+            const fullPath = path.join(targetDir, filePath)
+            const dirPath = path.dirname(fullPath)
+            
+            // 确保目录存在
+            fs.mkdirSync(dirPath, { recursive: true })
+            
+            // 移动文件到正确位置
+            try {
+              fs.renameSync(f.path, fullPath)
+            } catch (e) {
+              console.error(`移动文件失败 ${f.path} -> ${fullPath}:`, e)
+              // 如果移动失败，尝试复制
+              fs.copyFileSync(f.path, fullPath)
+              fs.unlinkSync(f.path)
+            }
+          } else {
+            // 单文件，直接保存到对应文件夹
+            const targetDir = path.join(UPLOAD_DIR, fieldname === 'transaction_files' ? 'transaction' : 'hotel')
+            const fullPath = path.join(targetDir, decodedOriginalName || f.originalname)
+            fs.mkdirSync(targetDir, { recursive: true })
+            fs.renameSync(f.path, fullPath)
+          }
+        } else {
+          // 如果没有元数据，保存到默认位置（使用解码后的文件名）
+          const targetDir = path.join(UPLOAD_DIR, fieldname === 'transaction_files' ? 'transaction' : 'hotel')
+          const fullPath = path.join(targetDir, decodedOriginalName || f.originalname)
+          fs.mkdirSync(targetDir, { recursive: true })
+          fs.renameSync(f.path, fullPath)
+        }
+        
         // 这些字段存储文件夹路径
         const folderType = fieldname === 'transaction_files' ? 'transaction' : 'hotel'
         const folderPath = path.join(UPLOAD_DIR, folderType)
