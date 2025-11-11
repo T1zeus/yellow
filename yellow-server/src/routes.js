@@ -264,7 +264,67 @@ router.get('/progress', (req, res) => {
   res.json({ percent, error })
 })
 
-// 结果文件列表查询接口
+// 结果记录列表查询接口（返回文件夹列表）
+router.get('/records', (req, res) => {
+  try {
+    if (!fs.existsSync(RESULT_DIR)) {
+      return res.json({ records: [] })
+    }
+
+    const items = fs.readdirSync(RESULT_DIR)
+    const recordList = items
+      .filter(item => {
+        const itemPath = path.join(RESULT_DIR, item)
+        return fs.statSync(itemPath).isDirectory()
+      })
+      .map(item => {
+        const itemPath = path.join(RESULT_DIR, item)
+        const stats = fs.statSync(itemPath)
+        
+        // 获取文件夹内的文件列表
+        const files = fs.readdirSync(itemPath)
+          .filter(file => {
+            const filePath = path.join(itemPath, file)
+            // 过滤掉临时文件（以 ~$ 开头的文件）
+            if (file.startsWith('~$')) {
+              return false
+            }
+            return fs.statSync(filePath).isFile() && (file.endsWith('.xlsx') || file.endsWith('.xls'))
+          })
+          .map(file => {
+            const filePath = path.join(itemPath, file)
+            const fileStats = fs.statSync(filePath)
+            return {
+              name: file,
+              size: fileStats.size,
+              sizeFormatted: formatFileSize(fileStats.size),
+            }
+          })
+        
+        return {
+          id: item,
+          name: item,
+          fileCount: files.length,
+          files: files,
+          createdTime: stats.birthtime.toISOString(),
+          createdTimeFormatted: stats.birthtime.toLocaleString('zh-CN'),
+          modifiedTime: stats.mtime.toISOString(),
+          modifiedTimeFormatted: stats.mtime.toLocaleString('zh-CN'),
+        }
+      })
+      .sort((a, b) => b.createdTime.localeCompare(a.createdTime)) // 按创建时间倒序
+
+    res.json({ 
+      records: recordList,
+      count: recordList.length,
+    })
+  } catch (error) {
+    console.error('获取记录列表失败:', error)
+    res.status(500).json({ error: '获取记录列表失败: ' + error.message })
+  }
+})
+
+// 结果文件列表查询接口（保留兼容性，返回根目录下的文件）
 router.get('/results', (req, res) => {
   try {
     if (!fs.existsSync(RESULT_DIR)) {
@@ -275,7 +335,7 @@ router.get('/results', (req, res) => {
     const fileList = files
       .filter(file => {
         const filePath = path.join(RESULT_DIR, file)
-        // 过滤掉临时文件（以 ~$ 开头的文件）
+        // 过滤掉临时文件（以 ~$ 开头的文件）和文件夹
         if (file.startsWith('~$')) {
           return false
         }
@@ -318,5 +378,37 @@ function formatFileSize(bytes) {
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
 }
+
+// 文件下载接口（支持从指定记录文件夹下载）
+// 注意：这个路由需要在 express.static 之前注册，否则会被静态文件服务拦截
+router.get('/files/:recordId/:filename', (req, res) => {
+  try {
+    const { recordId, filename } = req.params
+    const filePath = path.join(RESULT_DIR, recordId, filename)
+    
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: '文件不存在' })
+    }
+    
+    // 安全检查：确保文件路径在 RESULT_DIR 内
+    const resolvedPath = path.resolve(filePath)
+    const resolvedResultDir = path.resolve(RESULT_DIR)
+    if (!resolvedPath.startsWith(resolvedResultDir)) {
+      return res.status(403).json({ error: '访问被拒绝' })
+    }
+    
+    res.download(filePath, filename, (err) => {
+      if (err) {
+        console.error('下载文件失败:', err)
+        if (!res.headersSent) {
+          res.status(500).json({ error: '下载文件失败' })
+        }
+      }
+    })
+  } catch (error) {
+    console.error('下载文件失败:', error)
+    res.status(500).json({ error: '下载文件失败: ' + error.message })
+  }
+})
 
 module.exports = router

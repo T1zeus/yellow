@@ -1,14 +1,13 @@
 import { useState, useEffect } from 'react';
 import { Card, Table, Button, Space, Tag, message } from 'antd';
-import { DownloadOutlined, EyeOutlined, ReloadOutlined } from '@ant-design/icons';
-import { Link } from 'react-router-dom';
-import { getResults } from '../../services/resultService';
-import { downloadResultFile } from '../../services/resultService';
-import { formatFileSize } from '../../utils/format';
+import { EyeOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
+import { getRecords } from '../../services/resultService';
 
 const RecordsPage = () => {
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(false);
+    const navigate = useNavigate();
 
     useEffect(() => {
         loadRecordList();
@@ -17,60 +16,30 @@ const RecordsPage = () => {
     const loadRecordList = async () => {
         setLoading(true);
         try {
-            const result = await getResults();
-            const files = result.files || [];
+            const result = await getRecords();
+            const records = result.records || [];
             
-            const formattedData = files.map((file, index) => ({
-                key: file.name,
+            const formattedData = records.map((record, index) => ({
+                key: record.id,
                 index: index + 1,
-                name: file.name,
-                size: file.sizeFormatted || formatFileSize(file.size),
-                modifiedTime: file.modifiedTimeFormatted,
-                url: file.url,
+                id: record.id,
+                name: record.name,
+                fileCount: record.fileCount,
+                createdTime: record.createdTimeFormatted,
+                modifiedTime: record.modifiedTimeFormatted,
             }));
             
             setData(formattedData);
         } catch (error) {
-            console.error('获取结果列表失败:', error);
-            message.error('获取结果列表失败: ' + error.message);
+            console.error('获取记录列表失败:', error);
+            message.error('获取记录列表失败: ' + error.message);
         } finally {
             setLoading(false);
         }
     };
 
-    const handleDownload = async (filename) => {
-        try {
-            const blob = await downloadResultFile(filename);
-            const downloadUrl = window.URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            link.href = downloadUrl;
-            link.download = filename;
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            window.URL.revokeObjectURL(downloadUrl);
-            message.success('下载成功');
-        } catch (error) {
-            console.error('下载失败:', error);
-            message.error('下载失败: ' + error.message);
-        }
-    };
-
-    const getFileTag = (filename) => {
-        if (filename.includes('result')) {
-            return <Tag color="blue">结果</Tag>;
-        } else if (filename.includes('merge')) {
-            return <Tag color="green">合并</Tag>;
-        } else if (filename.includes('统计')) {
-            return <Tag color="orange">统计</Tag>;
-        } else if (filename.includes('可疑')) {
-            return <Tag color="red">可疑</Tag>;
-        } else if (filename === 'shopping.xlsx' || filename.includes('shopping')) {
-            return <Tag color="purple">购物</Tag>;
-        } else if (filename === 'transactions.xlsx' || filename.includes('transactions')) {
-            return <Tag color="cyan">交易</Tag>;
-        }
-        return null;
+    const handleViewDetail = (recordId) => {
+        navigate(`/record/${encodeURIComponent(recordId)}`);
     };
 
     const columns = [
@@ -81,21 +50,26 @@ const RecordsPage = () => {
             width: 80,
         },
         {
-            title: '文件名',
+            title: '记录名称',
             dataIndex: 'name',
             key: 'name',
             render: (text) => (
                 <Space>
-                    {getFileTag(text)}
-                    {text}
+                    <Tag color="blue" style={{ fontSize: '14px', padding: '4px 12px', lineHeight: '24px' }}>{text}</Tag>
                 </Space>
             ),
         },
         {
-            title: '文件大小',
-            dataIndex: 'size',
-            key: 'size',
-            width: 120,
+            title: '文件数量',
+            dataIndex: 'fileCount',
+            key: 'fileCount',
+            width: 100,
+        },
+        {
+            title: '创建时间',
+            dataIndex: 'createdTime',
+            key: 'createdTime',
+            width: 180,
         },
         {
             title: '修改时间',
@@ -106,20 +80,15 @@ const RecordsPage = () => {
         {
             title: '操作',
             key: 'action',
-            width: 200,
+            width: 150,
             render: (_, record) => (
                 <Space>
-                    {record.name === 'result.xlsx' && (
-                        <Link to={`/result/${encodeURIComponent(record.name)}`}>
-                            <Button type="link" icon={<EyeOutlined />}>查看详情</Button>
-                        </Link>
-                    )}
                     <Button 
                         type="link" 
-                        icon={<DownloadOutlined />}
-                        onClick={() => handleDownload(record.name)}
+                        icon={<EyeOutlined />}
+                        onClick={() => handleViewDetail(record.id)}
                     >
-                        下载
+                        查看详情
                     </Button>
                 </Space>
             ),

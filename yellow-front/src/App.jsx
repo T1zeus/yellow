@@ -10,6 +10,7 @@ import './styles/app.less';
 import RecordsPage from './pages/RecordsPage';
 import UploadPage from './pages/UploadPage';
 import ResultsPage from './pages/ResultsPage';
+import RecordDetailPage from './pages/RecordDetailPage';
 
 const { Header, Content, Footer, Sider } = Layout;
 
@@ -44,6 +45,7 @@ const App = () => {
           <Routes>
             <Route path='/' element={<RecordsPage />} />
             <Route path='/upload' element={<UploadPage />} />
+            <Route path='/record/:id' element={<RecordDetailPage />} />
             <Route path='/result/:id' element={<ResultsPage />} />
           </Routes>
         </Content>

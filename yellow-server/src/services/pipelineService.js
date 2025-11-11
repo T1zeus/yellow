@@ -26,6 +26,7 @@ const {
 const { progressStore } = require('../stores/progressStore')
 const { writeArrayToExcel } = require('./excelService')
 const path = require('path')
+const fs = require('fs')
 
 /**
  * 更新进度（分阶段）
@@ -44,6 +45,20 @@ function updateProgress(currentStep, totalSteps, basePercent, targetPercent) {
 // pipelineService.js 的骨架结构
 async function runPipelineNode({ RESULT_DIR, fileMap }) {
   try {
+    // 创建时间命名的文件夹（格式：YYYYMMDD_HHmmss）
+    const now = new Date();
+    const timestamp = now.getFullYear().toString() +
+      String(now.getMonth() + 1).padStart(2, '0') +
+      String(now.getDate()).padStart(2, '0') + '_' +
+      String(now.getHours()).padStart(2, '0') +
+      String(now.getMinutes()).padStart(2, '0') +
+      String(now.getSeconds()).padStart(2, '0');
+    
+    const recordDir = path.join(RESULT_DIR, timestamp);
+    fs.mkdirSync(recordDir, { recursive: true });
+    
+    console.log(`创建记录文件夹: ${recordDir}`);
+    
     // 重置进度
     progressStore.reset()
     
@@ -242,14 +257,14 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       }
       
       // 修复：无论是否有数据，都导出交易文件（与 antiporn 一致）
-      const transactionOutputPath = path.join(RESULT_DIR, 'transactions.xlsx')
+      const transactionOutputPath = path.join(recordDir, 'transactions.xlsx')
       writeArrayToExcel(transactionData, transactionOutputPath, {
         excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
       })
       console.log(`交易文件已导出: ${transactionData.length} 条记录`)
       
       // 导出异常交易文件（即使为空也导出，与 antiporn 一致）
-      const abnormalOutputPath = path.join(RESULT_DIR, '可疑收款账号.xlsx')
+      const abnormalOutputPath = path.join(recordDir, '可疑收款账号.xlsx')
       writeArrayToExcel(abnormalTransactions, abnormalOutputPath, {
         excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
       })
@@ -257,13 +272,13 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
     } else {
       console.log('未上传交易文件夹')
       // 修复：即使没有上传交易文件夹，也导出空文件（与 antiporn 一致）
-      const transactionOutputPath = path.join(RESULT_DIR, 'transactions.xlsx')
+      const transactionOutputPath = path.join(recordDir, 'transactions.xlsx')
       writeArrayToExcel([], transactionOutputPath, {
         excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
       })
       console.log('交易文件已导出: 0 条记录（空文件）')
       
-      const abnormalOutputPath = path.join(RESULT_DIR, '可疑收款账号.xlsx')
+      const abnormalOutputPath = path.join(recordDir, '可疑收款账号.xlsx')
       writeArrayToExcel([], abnormalOutputPath, {
         excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
       })
@@ -287,8 +302,8 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       if (shoppingData.length > 0) {
         shoppingResult = await processShoppingData(shoppingData)
         
-        // 导出完整购物数据
-        const shoppingOutputPath = path.join(RESULT_DIR, 'shopping.xlsx')
+          // 导出完整购物数据
+        const shoppingOutputPath = path.join(recordDir, 'shopping.xlsx')
         writeArrayToExcel(shoppingResult.allShoppingData, shoppingOutputPath, {
           excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
         })
@@ -608,7 +623,7 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
     })
     
     // 导出 merge.xlsx（在添加预警状态之前）
-    const mergeOutputPath = path.join(RESULT_DIR, 'merge.xlsx')
+    const mergeOutputPath = path.join(recordDir, 'merge.xlsx')
     writeArrayToExcel(mergeDataForExport, mergeOutputPath)
     console.log(`merge.xlsx 已导出: ${mergeDataForExport.length} 条记录，包含 ${mergeColumns.length} 个字段`)
 
@@ -638,8 +653,8 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       threshold: 2
     })
     
-    if (hotSpotsData.length > 0) {
-      const hotSpotsPath = path.join(RESULT_DIR, '高风险地点统计.xlsx')
+      if (hotSpotsData.length > 0) {
+      const hotSpotsPath = path.join(recordDir, '高风险地点统计.xlsx')
       writeArrayToExcel(hotSpotsData, hotSpotsPath, {
         excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
       })
@@ -657,8 +672,8 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       threshold: 2
     })
     
-    if (populationSpotsData.length > 0) {
-      const populationSpotsPath = path.join(RESULT_DIR, '实口地址高风险统计.xlsx')
+      if (populationSpotsData.length > 0) {
+      const populationSpotsPath = path.join(recordDir, '实口地址高风险统计.xlsx')
       writeArrayToExcel(populationSpotsData, populationSpotsPath, {
         excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
       })
@@ -683,7 +698,7 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
     }
     
     // 修复：无论是否有数据，都导出外卖收货地址统计文件（与 antiporn 一致）
-    const shoppingSpotsPath = path.join(RESULT_DIR, '外卖收货地址高风险统计.xlsx')
+    const shoppingSpotsPath = path.join(recordDir, '外卖收货地址高风险统计.xlsx')
     writeArrayToExcel(shoppingSpotsData, shoppingSpotsPath, {
       excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
     })
@@ -887,7 +902,7 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
     })
 
     // 导出最终结果文件（只包含前科人员）
-    const resultPath = path.join(RESULT_DIR, 'result.xlsx')
+    const resultPath = path.join(recordDir, 'result.xlsx')
     writeArrayToExcel(finalData, resultPath)
     console.log(`最终结果文件已导出: ${resultPath}`)
 

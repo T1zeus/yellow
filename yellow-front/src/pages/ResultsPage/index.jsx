@@ -72,7 +72,7 @@ const criminalColumns = [
 ];
 
 const ResultsPage = () => {
-    const { id } = useParams(); // 从 URL 获取文件名
+    const { id } = useParams(); // 从 URL 获取记录ID（文件夹名）
     const [data, setData] = useState([]); // 分析结果数据
     const [filteredData, setFilteredData] = useState([]); // 过滤后的数据
     const [loading, setLoading] = useState(false);
@@ -118,8 +118,10 @@ const ResultsPage = () => {
     const loadResultData = useCallback(async () => {
         setLoading(true);
         try {
-            const filename = decodeURIComponent(id);
-            const blob = await downloadResultFile(filename);
+            // id 现在是记录ID（文件夹名），而不是文件名
+            const recordId = decodeURIComponent(id);
+            const filename = 'result.xlsx';
+            const blob = await downloadResultFile(filename, recordId);
             const excelData = await readExcelFile(blob);
             
             // 处理数据，添加 key 和索引
@@ -143,11 +145,12 @@ const ResultsPage = () => {
     const loadHighRiskData = useCallback(async () => {
         setHighRiskLoading(true);
         try {
+            const recordId = decodeURIComponent(id);
             // 并行加载三个统计文件
             const [caseBlob, populationBlob, shoppingBlob] = await Promise.allSettled([
-                downloadResultFile('高风险地点统计.xlsx'),
-                downloadResultFile('实口地址高风险统计.xlsx'),
-                downloadResultFile('外卖收货地址高风险统计.xlsx'),
+                downloadResultFile('高风险地点统计.xlsx', recordId),
+                downloadResultFile('实口地址高风险统计.xlsx', recordId),
+                downloadResultFile('外卖收货地址高风险统计.xlsx', recordId),
             ]);
 
         let hasData = false;  // 添加标志变量
@@ -221,7 +224,7 @@ const ResultsPage = () => {
         } finally {
             setHighRiskLoading(false);
         }
-    }, []);
+    }, [id]);
 
     useEffect(() => {
         if (id) {
