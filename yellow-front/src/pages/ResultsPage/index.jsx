@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Button, Card, Table, Tag, Input, Space,
-     Select, message, Spin, Modal, Statistic, Row, Col, Tabs } from 'antd';
+     Select, message, Spin, Modal, Statistic, Row, Col, Tabs, ConfigProvider } from 'antd';
+import zhCN from 'antd/locale/zh_CN';
 import { SearchOutlined, SaveOutlined, WarningOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import { downloadResultFile } from '../../services/resultService';
@@ -8,6 +9,19 @@ import { readExcelFile } from '../../utils/excel';
 import './index.less';
 const { Search } = Input;
 const { TabPane } = Tabs;
+
+// 自定义表格 locale，将排序提示改为中文
+const tableLocale = {
+    ...zhCN.Table,
+    filterTitle: '筛选',
+    filterConfirm: '确定',
+    filterReset: '重置',
+    filterEmptyText: '无筛选项',
+    emptyText: '暂无数据',
+    selectAll: '全选',
+    selectInvert: '反选',
+    sortTitle: '点击排序',
+};
 // 前科记录表格列定义
 const criminalColumns = [
     {
@@ -93,6 +107,12 @@ const ResultsPage = () => {
     const [highRiskLoading, setHighRiskLoading] = useState(false);
     const [showHighRiskTab, setShowHighRiskTab] = useState(false); // 是否显示高风险地点标签页
     const [activeTabKey, setActiveTabKey] = useState('result'); // 当前激活的标签页
+    
+    // 分页状态
+    const [pagination, setPagination] = useState({
+        current: 1,
+        pageSize: 20,
+    });
 
     // 使用 useCallback 稳定 loadResultData 的引用，避免 useEffect 报 missing dependency
     const loadResultData = useCallback(async () => {
@@ -223,25 +243,23 @@ const ResultsPage = () => {
         }
     }, [data]);
 
-    // 当筛选条件变化时，更新过滤后的数据
-    useEffect(() => {
-        applyFilters();
-    }, [data, searchText, riskFilter]);
-
-    // 应用筛选条件
-    const applyFilters = () => {
+    // 当筛选条件变化时，更新过滤后的数据（使用 useCallback 保持引用稳定）
+    const applyFilters = useCallback(() => {
         let filtered = [...data];
 
-        // 搜索筛选（姓名、证件号码、手机号码）
+        // 搜索筛选（支持所有字段的关键词搜索，类似antiporn）
         if (searchText) {
-            const searchLower = searchText.toLowerCase();
+            const searchLower = searchText.toLowerCase().trim();
             filtered = filtered.filter(row => {
-                const name = String(row['姓名'] || '').toLowerCase();
-                const idNumber = String(row['证件号码'] || '').toLowerCase();
-                const phone = String(row['手机号码'] || '').toLowerCase();
-                return name.includes(searchLower) || 
-                       idNumber.includes(searchLower) || 
-                       phone.includes(searchLower);
+                // 遍历所有字段，检查是否包含搜索关键词
+                return Object.keys(row).some(key => {
+                    const value = row[key];
+                    if (value == null || value === undefined) return false;
+                    
+                    // 将值转换为字符串并转为小写进行匹配
+                    const strValue = String(value).toLowerCase();
+                    return strValue.includes(searchLower);
+                });
             });
         }
 
@@ -254,7 +272,59 @@ const ResultsPage = () => {
         }
 
         setFilteredData(filtered);
-    };
+    }, [data, searchText, riskFilter]);
+
+    useEffect(() => {
+        applyFilters();
+        // 筛选条件变化时，重置到第一页
+        setPagination(prev => ({
+            ...prev,
+            current: 1,
+        }));
+    }, [applyFilters]);
+
+    // 将排序提示改为中文
+    useEffect(() => {
+        const observer = new MutationObserver(() => {
+            // 查找所有包含排序提示的 tooltip
+            const tooltips = document.querySelectorAll('.ant-tooltip-inner');
+            tooltips.forEach(tooltip => {
+                const text = tooltip.textContent || '';
+                if (text.includes('Click to sort ascending') || text.includes('click to sort ascending')) {
+                    tooltip.textContent = '点击升序排序';
+                } else if (text.includes('Click to sort descending') || text.includes('click to sort descending')) {
+                    tooltip.textContent = '点击降序排序';
+                } else if (text.includes('Cancel sort') || text.includes('cancel sort')) {
+                    tooltip.textContent = '取消排序';
+                }
+            });
+        });
+
+        // 开始观察 DOM 变化
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+        });
+
+        // 初始执行一次
+        setTimeout(() => {
+            const tooltips = document.querySelectorAll('.ant-tooltip-inner');
+            tooltips.forEach(tooltip => {
+                const text = tooltip.textContent || '';
+                if (text.includes('Click to sort ascending') || text.includes('click to sort ascending')) {
+                    tooltip.textContent = '点击升序排序';
+                } else if (text.includes('Click to sort descending') || text.includes('click to sort descending')) {
+                    tooltip.textContent = '点击降序排序';
+                } else if (text.includes('Cancel sort') || text.includes('cancel sort')) {
+                    tooltip.textContent = '取消排序';
+                }
+            });
+        }, 100);
+
+        return () => {
+            observer.disconnect();
+        };
+    }, []);
 
     // 用于显示各种详情信息（入住、同住、资金、商品、收货地址、居住详情）
     const showDetailModal = (title, content) => {
@@ -375,6 +445,26 @@ const ResultsPage = () => {
         return <Tag color={config.color}>{level || '低'}</Tag>;
     };
 
+    // 生成列的筛选选项（包括空值）
+    const generateFilters = useCallback((dataIndex, data) => {
+        const valueSet = new Set();
+        data.forEach(row => {
+            const value = row[dataIndex];
+            if (value == null || value === '' || String(value).trim() === '') {
+                valueSet.add('(空)');
+            } else {
+                valueSet.add(String(value).trim());
+            }
+        });
+        const filters = Array.from(valueSet)
+            .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+            .map(value => ({
+                text: value,
+                value: value === '(空)' ? null : value,
+            }));
+        return filters;
+    }, []);
+
     // 表格列定义 - 按用户要求的顺序排列
     const columns = [
         {
@@ -390,18 +480,39 @@ const ResultsPage = () => {
             key: '姓名',
             width: 90,
             fixed: 'left',
+            filters: data.length > 0 ? generateFilters('姓名', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['姓名'] || String(record['姓名']).trim() === '';
+                }
+                return String(record['姓名'] || '').trim() === value;
+            },
         },
         {
             title: '证件号码',
             dataIndex: '证件号码',
             key: '证件号码',
             width: 160,
+            filters: data.length > 0 ? generateFilters('证件号码', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['证件号码'] || String(record['证件号码']).trim() === '';
+                }
+                return String(record['证件号码'] || '').trim() === value;
+            },
         },
         {
             title: '手机号码',
             dataIndex: '手机号码',
             key: '手机号码',
             width: 110,
+            filters: data.length > 0 ? generateFilters('手机号码', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['手机号码'] || String(record['手机号码']).trim() === '';
+                }
+                return String(record['手机号码'] || '').trim() === value;
+            },
         },
         {
             title: '前科次数',
@@ -429,6 +540,13 @@ const ResultsPage = () => {
             dataIndex: '案由',
             key: '案由',
             width: 95,
+            filters: data.length > 0 ? generateFilters('案由', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['案由'] || String(record['案由']).trim() === '';
+                }
+                return String(record['案由'] || '').trim() === value;
+            },
             render: (text) => {
                 if (!text) return '-';
                 // 将逗号、顿号、分号等分隔符拆分，让每个分类单独一行显示
@@ -460,18 +578,39 @@ const ResultsPage = () => {
             dataIndex: '案发地点',
             key: '案发地点',
             width: 120,
+            filters: data.length > 0 ? generateFilters('案发地点', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['案发地点'] || String(record['案发地点']).trim() === '';
+                }
+                return String(record['案发地点'] || '').trim() === value;
+            },
         },
         {
             title: '户籍地址',
             dataIndex: '户籍地址',
             key: '户籍地址',
             width: 120,
+            filters: data.length > 0 ? generateFilters('户籍地址', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['户籍地址'] || String(record['户籍地址']).trim() === '';
+                }
+                return String(record['户籍地址'] || '').trim() === value;
+            },
         },
         {
             title: '居住地址',
             dataIndex: '居住地址',
             key: '居住地址',
             width: 120,
+            filters: data.length > 0 ? generateFilters('居住地址', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['居住地址'] || String(record['居住地址']).trim() === '';
+                }
+                return String(record['居住地址'] || '').trim() === value;
+            },
         },
         {
             title: '居住情况',
@@ -499,24 +638,56 @@ const ResultsPage = () => {
             dataIndex: '所属辖区',
             key: '所属辖区',
             width: 90,
+            filters: data.length > 0 ? generateFilters('所属辖区', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['所属辖区'] || String(record['所属辖区']).trim() === '';
+                }
+                return String(record['所属辖区'] || '').trim() === value;
+            },
         },
         {
             title: '从业单位',
             dataIndex: '从业单位',
             key: '从业单位',
             width: 100,
+            filters: data.length > 0 ? generateFilters('从业单位', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['从业单位'] || String(record['从业单位']).trim() === '';
+                }
+                return String(record['从业单位'] || '').trim() === value;
+            },
         },
         {
             title: '社保情况',
             dataIndex: '社保情况',
             key: '社保情况',
             width: 90,
+            filters: data.length > 0 ? generateFilters('社保情况', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['社保情况'] || String(record['社保情况']).trim() === '';
+                }
+                return String(record['社保情况'] || '').trim() === value;
+            },
         },
         {
             title: '异常购物',
             dataIndex: '异常购物_等级',
             key: '异常购物_等级',
             width: 75,
+            filters: [
+                { text: '是', value: '是' },
+                { text: '否', value: '否' },
+                { text: '(空)', value: null },
+            ],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['异常购物_等级'] || String(record['异常购物_等级']).trim() === '';
+                }
+                return String(record['异常购物_等级'] || '').trim() === value;
+            },
             render: (value, record) => {
                 // 如果异常购物为"是"且有商品名称详细，点击显示详情
                 if (value === '是' && record['商品名称详细']) {
@@ -538,6 +709,13 @@ const ResultsPage = () => {
             dataIndex: '收货地址分类',
             key: '收货地址分类',
             width: 95,
+            filters: data.length > 0 ? generateFilters('收货地址分类', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['收货地址分类'] || String(record['收货地址分类']).trim() === '';
+                }
+                return String(record['收货地址分类'] || '').trim() === value;
+            },
             render: (text, record) => {
                 // 如果有收货地址分类且有收货地址详细，点击显示详情
                 if (text && record['收货地址详细']) {
@@ -559,6 +737,14 @@ const ResultsPage = () => {
             dataIndex: '异常资金',
             key: '异常资金',
             width: 75,
+            filters: [
+                { text: '是', value: 1 },
+                { text: '否', value: 0 },
+            ],
+            onFilter: (value, record) => {
+                const num = parseInt(record['异常资金'] || 0, 10);
+                return num === value;
+            },
             render: (value, record) => {
                 const num = parseInt(value || 0, 10);
                 // 如果异常资金为1且有资金备注，点击显示详情
@@ -640,6 +826,13 @@ const ResultsPage = () => {
             dataIndex: '更新时间',
             key: '更新时间',
             width: 90,
+            filters: data.length > 0 ? generateFilters('更新时间', data) : [],
+            onFilter: (value, record) => {
+                if (value === null) {
+                    return !record['更新时间'] || String(record['更新时间']).trim() === '';
+                }
+                return String(record['更新时间'] || '').trim() === value;
+            },
         },
     ];
 
@@ -772,8 +965,9 @@ const ResultsPage = () => {
 
     // 主渲染函数
     return (
-        <div className='results-page'>
-            <Card 
+        <ConfigProvider locale={zhCN}>
+            <div className='results-page'>
+                <Card 
                 title={`分析结果 - ${id ? decodeURIComponent(id) : 'result.xlsx'}`}
                 extra={
                     <Space size="middle" style={{ display: 'flex', alignItems: 'center' }}>
@@ -820,9 +1014,9 @@ const ResultsPage = () => {
                             <Select.Option value="低">低风险</Select.Option>
                         </Select>
                         <Search
-                            placeholder="搜索姓名/证件号/手机号"
+                            placeholder="搜索关键词（支持所有字段）"
                             allowClear
-                            style={{ width: 250 }}
+                            style={{ width: 280 }}
                             onSearch={setSearchText}
                             onChange={(e) => setSearchText(e.target.value)}
                             enterButton={<SearchOutlined />}
@@ -844,15 +1038,29 @@ const ResultsPage = () => {
                     <TabPane tab="分析结果" key="result">
                         <Spin spinning={loading}>
                             <Table 
+                                locale={tableLocale}
                                 columns={columns}
                                 dataSource={filteredData}
                                 scroll={{ x: 1600, y: 'calc(100vh - 280px)' }}
                                 pagination={{
-                                    pageSize: 20,
+                                    current: pagination.current,
+                                    pageSize: pagination.pageSize,
                                     showSizeChanger: true,
                                     showTotal: (total) => `共 ${total} 条记录`,
                                     pageSizeOptions: ['10', '20', '50', '100'],
                                     size: 'small',
+                                    onChange: (page, pageSize) => {
+                                        setPagination({
+                                            current: page,
+                                            pageSize: pageSize,
+                                        });
+                                    },
+                                    onShowSizeChange: (current, size) => {
+                                        setPagination({
+                                            current: 1, // 改变每页显示数量时，重置到第一页
+                                            pageSize: size,
+                                        });
+                                    },
                                 }}
                                 size="small"
                             />
@@ -990,6 +1198,7 @@ const ResultsPage = () => {
                 </Modal>
             </Card>
         </div>
+        </ConfigProvider>
     );
 };
 

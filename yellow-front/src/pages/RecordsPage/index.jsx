@@ -65,6 +65,10 @@ const RecordsPage = () => {
             return <Tag color="orange">统计</Tag>;
         } else if (filename.includes('可疑')) {
             return <Tag color="red">可疑</Tag>;
+        } else if (filename === 'shopping.xlsx' || filename.includes('shopping')) {
+            return <Tag color="purple">购物</Tag>;
+        } else if (filename === 'transactions.xlsx' || filename.includes('transactions')) {
+            return <Tag color="cyan">交易</Tag>;
         }
         return null;
     };

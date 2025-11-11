@@ -275,6 +275,10 @@ router.get('/results', (req, res) => {
     const fileList = files
       .filter(file => {
         const filePath = path.join(RESULT_DIR, file)
+        // 过滤掉临时文件（以 ~$ 开头的文件）
+        if (file.startsWith('~$')) {
+          return false
+        }
         return fs.statSync(filePath).isFile() && (file.endsWith('.xlsx') || file.endsWith('.xls'))
       })
       .map(file => {
