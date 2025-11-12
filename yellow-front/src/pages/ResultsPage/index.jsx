@@ -4,8 +4,7 @@ import { Button, Card, Table, Tag, Input, Space,
 import zhCN from 'antd/locale/zh_CN';
 import { SearchOutlined, SaveOutlined, WarningOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
-import { downloadResultFile } from '../../services/resultService';
-import { readExcelFile } from '../../utils/excel';
+import { getRecordData } from '../../services/resultService';
 import './index.less';
 const { Search } = Input;
 const { TabPane } = Tabs;
@@ -120,9 +119,16 @@ const ResultsPage = () => {
         try {
             // id 现在是记录ID（文件夹名），而不是文件名
             const recordId = decodeURIComponent(id);
-            const filename = 'result.xlsx';
-            const blob = await downloadResultFile(filename, recordId);
-            const excelData = await readExcelFile(blob);
+            
+            // 只从 MongoDB 加载数据
+            const recordData = await getRecordData(recordId);
+            const excelData = recordData.tables?.result || [];
+            
+            if (excelData.length === 0) {
+                message.warning('该记录没有数据');
+                setData([]);
+                return;
+            }
             
             // 处理数据，添加 key 和索引
             const processedData = excelData.map((row, index) => ({
@@ -132,7 +138,7 @@ const ResultsPage = () => {
             }));
             
             setData(processedData);
-            message.success('数据加载成功');
+            message.success('数据加载成功（来自数据库）');
         } catch (error) {
             console.error('加载数据失败:', error);
             message.error('加载数据失败: ' + (error?.message || String(error)));
@@ -141,86 +147,46 @@ const ResultsPage = () => {
         }
     }, [id]);
 
-     // 这个函数会尝试加载三个统计文件：高风险地点统计.xlsx、实口地址高风险统计.xlsx、外卖收货地址高风险统计.xlsx
+     // 从 MongoDB 加载三个统计数据
     const loadHighRiskData = useCallback(async () => {
         setHighRiskLoading(true);
         try {
             const recordId = decodeURIComponent(id);
-            // 并行加载三个统计文件
-            const [caseBlob, populationBlob, shoppingBlob] = await Promise.allSettled([
-                downloadResultFile('高风险地点统计.xlsx', recordId),
-                downloadResultFile('实口地址高风险统计.xlsx', recordId),
-                downloadResultFile('外卖收货地址高风险统计.xlsx', recordId),
-            ]);
-
-        let hasData = false;  // 添加标志变量
-        const newHighRiskData = {
-            caseLocations: [],
-            populationAddresses: [],
-            shoppingAddresses: [],
-        };
-
-        // 处理案发地点统计
-        if (caseBlob.status === 'fulfilled') {
-            try {
-                const caseData = await readExcelFile(caseBlob.value);
-                newHighRiskData.caseLocations = caseData.map((row, index) => ({
+            
+            // 从 MongoDB 加载统计数据
+            const recordData = await getRecordData(recordId);
+            
+            const newHighRiskData = {
+                caseLocations: (recordData.tables?.risk_hotspot || []).map((row, index) => ({
                     ...row,
                     key: `case-${index}`,
                     index: index + 1,
-                }));
-                if (newHighRiskData.caseLocations.length > 0) {
-                    hasData = true;
-                }
-            } catch (e) {
-                console.warn('案发地点统计数据格式错误:', e);
-            }
-        }
- 
-        // 处理实口地址统计
-        if (populationBlob.status === 'fulfilled') {
-            try {
-                const popData = await readExcelFile(populationBlob.value);
-                newHighRiskData.populationAddresses = popData.map((row, index) => ({
+                })),
+                populationAddresses: (recordData.tables?.risk_population || []).map((row, index) => ({
                     ...row,
                     key: `pop-${index}`,
                     index: index + 1,
-                }));
-                if (newHighRiskData.populationAddresses.length > 0) {
-                    hasData = true;
-                }
-            } catch (e) {
-                console.warn('实口地址统计数据格式错误:', e);
-            }
-        }
-
-        // 处理外卖地址统计
-        if (shoppingBlob.status === 'fulfilled') {
-            try {
-                const shopData = await readExcelFile(shoppingBlob.value);
-                newHighRiskData.shoppingAddresses = shopData.map((row, index) => ({
+                })),
+                shoppingAddresses: (recordData.tables?.risk_shopping || []).map((row, index) => ({
                     ...row,
                     key: `shop-${index}`,
                     index: index + 1,
-                }));
-                if (newHighRiskData.shoppingAddresses.length > 0) {
-                    hasData = true;
-                }
-            } catch (e) {
-                console.warn('外卖地址统计数据格式错误:', e);
+                })),
+            };
+            
+            // 统一设置状态
+            setHighRiskData(newHighRiskData);
+            
+            // 如果有数据，显示标签页
+            const hasData = newHighRiskData.caseLocations.length > 0 || 
+                           newHighRiskData.populationAddresses.length > 0 || 
+                           newHighRiskData.shoppingAddresses.length > 0;
+            if (hasData) {
+                setShowHighRiskTab(true);
             }
-        }
-
-        // 统一设置状态
-        setHighRiskData(newHighRiskData);
-
-           // 如果有数据，显示标签页
-        if (hasData) {
-            setShowHighRiskTab(true);
-        }
         } catch (error) {
-            console.error('加载高风险地点统计失败:', error);
-            // 不显示错误提示，因为统计文件可能不存在
+            console.error('加载高风险数据失败:', error);
+            // 不显示错误提示，因为统计数据可能不存在
         } finally {
             setHighRiskLoading(false);
         }

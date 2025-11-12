@@ -2,8 +2,7 @@ import { useState, useEffect } from 'react';
 import { Card, Table, Button, Space, Tag, message } from 'antd';
 import { DownloadOutlined, EyeOutlined, ReloadOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getRecords } from '../../services/resultService';
-import { downloadResultFile } from '../../services/resultService';
+import { getRecordData, exportRecordFile } from '../../services/resultService';
 import { formatFileSize } from '../../utils/format';
 
 const RecordDetailPage = () => {
@@ -22,24 +21,35 @@ const RecordDetailPage = () => {
     const loadRecordDetail = async () => {
         setLoading(true);
         try {
-            const result = await getRecords();
-            const records = result.records || [];
-            const record = records.find(r => r.id === decodeURIComponent(id));
+            const recordId = decodeURIComponent(id);
             
-            if (!record) {
+            // 从 MongoDB 获取记录数据
+            const recordData = await getRecordData(recordId);
+            
+            if (!recordData) {
                 message.error('记录不存在');
                 navigate('/');
                 return;
             }
             
-            setRecordInfo(record);
+            // 设置记录信息
+            setRecordInfo({
+                id: recordData.recordId,
+                name: recordData.recordId,
+                fileCount: recordData.files?.length || 0,
+                files: recordData.files || [],
+                createdTime: recordData.createdAt,
+                createdTimeFormatted: recordData.createdAt ? new Date(recordData.createdAt).toLocaleString('zh-CN') : '',
+                modifiedTime: recordData.updatedAt,
+                modifiedTimeFormatted: recordData.updatedAt ? new Date(recordData.updatedAt).toLocaleString('zh-CN') : '',
+            });
             
             // 格式化文件列表
-            const formattedFiles = record.files.map((file, index) => ({
-                key: file.name,
+            const formattedFiles = (recordData.files || []).map((file, index) => ({
+                key: file.fileName,
                 index: index + 1,
-                name: file.name,
-                size: file.sizeFormatted || formatFileSize(file.size),
+                name: file.fileName,
+                size: `${file.rowCount || 0} 条记录`,
             }));
             
             setFileList(formattedFiles);
@@ -54,7 +64,26 @@ const RecordDetailPage = () => {
     const handleDownload = async (filename) => {
         try {
             const recordId = decodeURIComponent(id);
-            const blob = await downloadResultFile(filename, recordId);
+            
+            // 映射文件名到 tableKey
+            const FILE_MAP = {
+                'result.xlsx': 'result',
+                'merge.xlsx': 'merge',
+                'transactions.xlsx': 'transactions',
+                '可疑收款账号.xlsx': 'abnormal_accounts',
+                'shopping.xlsx': 'shopping',
+                '高风险地点统计.xlsx': 'risk_hotspot',
+                '实口地址高风险统计.xlsx': 'risk_population',
+                '外卖收货地址高风险统计.xlsx': 'risk_shopping',
+            };
+            
+            const tableKey = FILE_MAP[filename];
+            if (!tableKey) {
+                message.error('不支持下载该文件类型');
+                return;
+            }
+            
+            const blob = await exportRecordFile(recordId, tableKey);
             const downloadUrl = window.URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = downloadUrl;

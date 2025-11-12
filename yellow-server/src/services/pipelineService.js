@@ -24,9 +24,7 @@ const {
   analyzeShoppingSpots 
 } = require('./statisticsService')
 const { progressStore } = require('../stores/progressStore')
-const { writeArrayToExcel } = require('./excelService')
-const path = require('path')
-const fs = require('fs')
+const { MongoClient } = require('mongodb')
 
 /**
  * 更新进度（分阶段）
@@ -37,15 +35,99 @@ function updateProgress(currentStep, totalSteps, basePercent, targetPercent) {
 }
 
 /**
+ * 保存数据到 MongoDB
+ * @param {Object} options - 配置选项
+ * @param {string} options.recordId - 记录ID（时间戳）
+ * @param {Object} options.tables - 表格数据对象
+ */
+async function saveToMongoDB({ recordId, tables }) {
+  const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017'
+  const DB_NAME = process.env.MONGO_DB_NAME || 'yellow_db'
+  
+  const client = new MongoClient(MONGO_URI)
+  
+  try {
+    await client.connect()
+    console.log('[MongoDB] 已连接数据库')
+    
+    const db = client.db(DB_NAME)
+    const collection = db.collection('analysis_records')
+    
+    // 准备统计数据
+    const statistics = {}
+    const filesMeta = []
+    
+    const FILE_MAP = [
+      { tableKey: 'result', fileName: 'result.xlsx' },
+      { tableKey: 'merge', fileName: 'merge.xlsx' },
+      { tableKey: 'transactions', fileName: 'transactions.xlsx' },
+      { tableKey: 'abnormal_accounts', fileName: '可疑收款账号.xlsx' },
+      { tableKey: 'shopping', fileName: 'shopping.xlsx' },
+      { tableKey: 'risk_hotspot', fileName: '高风险地点统计.xlsx' },
+      { tableKey: 'risk_population', fileName: '实口地址高风险统计.xlsx' },
+      { tableKey: 'risk_shopping', fileName: '外卖收货地址高风险统计.xlsx' },
+    ]
+    
+    const now = new Date()
+    
+    for (const { tableKey, fileName } of FILE_MAP) {
+      const data = tables[tableKey] || []
+      const count = Array.isArray(data) ? data.length : 0
+      
+      statistics[`${tableKey}Count`] = count
+      
+      // 不再从文件系统读取，直接使用当前时间
+      filesMeta.push({
+        tableKey,
+        fileName,
+        rowCount: count,
+        lastModified: now,
+      })
+    }
+    
+    // 准备文档
+    const doc = {
+      recordId,
+      statistics,
+      files: filesMeta,
+      tables,
+      updatedAt: now,
+    }
+    
+    // 使用 upsert 保存
+    await collection.updateOne(
+      { recordId },
+      {
+        $set: {
+          ...doc,
+          updatedAt: now,
+        },
+        $setOnInsert: {
+          createdAt: now,
+        },
+      },
+      { upsert: true }
+    )
+    
+    console.log(`[MongoDB] 记录已保存: ${recordId}`)
+    console.log(`[MongoDB] 统计数据:`, statistics)
+  } catch (error) {
+    console.error('[MongoDB] 保存失败:', error)
+    throw error
+  } finally {
+    await client.close()
+    console.log('[MongoDB] 连接已关闭')
+  }
+}
+
+/**
  * 运行数据处理管道
  * @param {Object} options - 配置选项
- * @param {string} options.RESULT_DIR - 结果目录
  * @param {Map} options.fileMap - 文件路径映射
  */
-// pipelineService.js 的骨架结构
-async function runPipelineNode({ RESULT_DIR, fileMap }) {
+async function runPipelineNode({ fileMap }) {
   try {
-    // 创建时间命名的文件夹（格式：YYYYMMDD_HHmmss）
+    // 生成时间戳作为记录ID（格式：YYYYMMDD_HHmmss）
     const now = new Date();
     const timestamp = now.getFullYear().toString() +
       String(now.getMonth() + 1).padStart(2, '0') +
@@ -54,10 +136,7 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       String(now.getMinutes()).padStart(2, '0') +
       String(now.getSeconds()).padStart(2, '0');
     
-    const recordDir = path.join(RESULT_DIR, timestamp);
-    fs.mkdirSync(recordDir, { recursive: true });
-    
-    console.log(`创建记录文件夹: ${recordDir}`);
+    console.log(`生成记录ID: ${timestamp}`);
     
     // 重置进度
     progressStore.reset()
@@ -256,33 +335,14 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
         console.log('交易数据为空')
       }
       
-      // 修复：无论是否有数据，都导出交易文件（与 antiporn 一致）
-      const transactionOutputPath = path.join(recordDir, 'transactions.xlsx')
-      writeArrayToExcel(transactionData, transactionOutputPath, {
-        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
-      })
-      console.log(`交易文件已导出: ${transactionData.length} 条记录`)
-      
-      // 导出异常交易文件（即使为空也导出，与 antiporn 一致）
-      const abnormalOutputPath = path.join(recordDir, '可疑收款账号.xlsx')
-      writeArrayToExcel(abnormalTransactions, abnormalOutputPath, {
-        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
-      })
-      console.log(`异常交易文件已导出: ${abnormalTransactions.length} 个可疑账户`)
+      // 数据将直接保存到 MongoDB，不再导出文件
+      console.log(`交易数据处理完成: ${transactionData.length} 条记录`)
+      console.log(`异常交易处理完成: ${abnormalTransactions.length} 个可疑账户`)
     } else {
       console.log('未上传交易文件夹')
-      // 修复：即使没有上传交易文件夹，也导出空文件（与 antiporn 一致）
-      const transactionOutputPath = path.join(recordDir, 'transactions.xlsx')
-      writeArrayToExcel([], transactionOutputPath, {
-        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
-      })
-      console.log('交易文件已导出: 0 条记录（空文件）')
-      
-      const abnormalOutputPath = path.join(recordDir, '可疑收款账号.xlsx')
-      writeArrayToExcel([], abnormalOutputPath, {
-        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
-      })
-      console.log('异常交易文件已导出: 0 个可疑账户（空文件）')
+      // 数据将直接保存到 MongoDB，不再导出文件
+      console.log('交易数据处理完成: 0 条记录')
+      console.log('异常交易处理完成: 0 个可疑账户')
     }
     
     updateProgress(1, 1, 20, 30)
@@ -302,12 +362,8 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       if (shoppingData.length > 0) {
         shoppingResult = await processShoppingData(shoppingData)
         
-          // 导出完整购物数据
-        const shoppingOutputPath = path.join(recordDir, 'shopping.xlsx')
-        writeArrayToExcel(shoppingResult.allShoppingData, shoppingOutputPath, {
-          excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
-        })
-        console.log(`购物文件已导出: ${shoppingResult.allShoppingData.length} 条记录`)
+        // 数据将直接保存到 MongoDB，不再导出文件
+        console.log(`购物数据处理完成: ${shoppingResult.allShoppingData.length} 条记录`)
         
         groupedSensitiveData = shoppingResult.groupedSensitiveData
         groupedShoppingData = shoppingResult.groupedShoppingData
@@ -574,11 +630,8 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
     mergedData = calculateRoommate(roommateData, mergedData)
     console.log('同住人分析完成')
 
-    // 修复：在添加预警状态之前导出 merge.xlsx（与 antiporn 一致）
-    // antiporn: 在 export_results 函数中，在添加预警状态之前导出 merge.xlsx
-    console.log('开始导出 merge.xlsx...')
-    
-    // 定义 merge.xlsx 需要包含的字段（与 antiporn 的 columns_to_keep 一致）
+    // 准备 merge 数据（用于保存到 MongoDB）
+    // 定义 merge 需要包含的字段（与 antiporn 的 columns_to_keep 一致）
     const mergeColumns = [
       '姓名',
       '证件类型',
@@ -611,7 +664,7 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       '更新时间',
     ]
     
-    // 准备 merge.xlsx 数据：只包含指定字段，确保字段顺序一致
+    // 准备 merge 数据：只包含指定字段，确保字段顺序一致
     // 注意：此时字段重命名已完成，mergedData 中的字段名已经是最终名称
     const mergeDataForExport = mergedData.map(row => {
       const mergeRow = {}
@@ -622,10 +675,8 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       return mergeRow
     })
     
-    // 导出 merge.xlsx（在添加预警状态之前）
-    const mergeOutputPath = path.join(recordDir, 'merge.xlsx')
-    writeArrayToExcel(mergeDataForExport, mergeOutputPath)
-    console.log(`merge.xlsx 已导出: ${mergeDataForExport.length} 条记录，包含 ${mergeColumns.length} 个字段`)
+    // 数据将直接保存到 MongoDB，不再导出文件
+    console.log(`merge 数据处理完成: ${mergeDataForExport.length} 条记录，包含 ${mergeColumns.length} 个字段`)
 
     updateProgress(1, 1, 80, 85)
 
@@ -653,15 +704,8 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       threshold: 2
     })
     
-      if (hotSpotsData.length > 0) {
-      const hotSpotsPath = path.join(recordDir, '高风险地点统计.xlsx')
-      writeArrayToExcel(hotSpotsData, hotSpotsPath, {
-        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
-      })
-      console.log(`案发地点统计已导出: ${hotSpotsData.length} 条记录`)
-    } else {
-      console.log('案发地点统计为空')
-    }
+    // 数据将直接保存到 MongoDB，不再导出文件
+    console.log(`案发地点统计完成: ${hotSpotsData.length} 条记录`)
 
     updateProgress(0.33, 1, 90, 95)
 
@@ -672,15 +716,8 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       threshold: 2
     })
     
-      if (populationSpotsData.length > 0) {
-      const populationSpotsPath = path.join(recordDir, '实口地址高风险统计.xlsx')
-      writeArrayToExcel(populationSpotsData, populationSpotsPath, {
-        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
-      })
-      console.log(`实口居住地址统计已导出: ${populationSpotsData.length} 条记录`)
-    } else {
-      console.log('实口居住地址统计为空')
-    }
+    // 数据将直接保存到 MongoDB，不再导出文件
+    console.log(`实口居住地址统计完成: ${populationSpotsData.length} 条记录`)
 
     updateProgress(0.66, 1, 90, 95)
 
@@ -697,12 +734,8 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       console.log('没有购物数据，使用空数据')
     }
     
-    // 修复：无论是否有数据，都导出外卖收货地址统计文件（与 antiporn 一致）
-    const shoppingSpotsPath = path.join(recordDir, '外卖收货地址高风险统计.xlsx')
-    writeArrayToExcel(shoppingSpotsData, shoppingSpotsPath, {
-      excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
-    })
-    console.log(`外卖收货地址统计已导出: ${shoppingSpotsData.length} 条记录`)
+    // 数据将直接保存到 MongoDB，不再导出文件
+    console.log(`外卖收货地址统计完成: ${shoppingSpotsData.length} 条记录`)
 
     updateProgress(1, 1, 90, 95)
     
@@ -901,14 +934,34 @@ async function runPipelineNode({ RESULT_DIR, fileMap }) {
       return resultRow
     })
 
-    // 导出最终结果文件（只包含前科人员）
-    const resultPath = path.join(recordDir, 'result.xlsx')
-    writeArrayToExcel(finalData, resultPath)
-    console.log(`最终结果文件已导出: ${resultPath}`)
+    // 数据将直接保存到 MongoDB，不再导出文件
+    console.log(`最终结果数据处理完成: ${finalData.length} 条记录`)
 
     updateProgress(1, 1, 96, 100)
 
     // 注意：merge.xlsx 已在阶段7（同住人分析之后，预警状态之前）导出，这里不再重复导出
+
+    // 阶段12: 写入 MongoDB (100%)
+    console.log('开始写入 MongoDB...')
+    try {
+      await saveToMongoDB({
+        recordId: timestamp,
+        tables: {
+          result: finalData,
+          merge: mergeDataForExport,
+          transactions: transactionData || [],
+          abnormal_accounts: abnormalTransactions || [],
+          shopping: shoppingResult?.allShoppingData || [],
+          risk_hotspot: hotSpotsData || [],
+          risk_population: populationSpotsData || [],
+          risk_shopping: shoppingSpotsData || [],
+        },
+      })
+      console.log('MongoDB 写入完成')
+    } catch (mongoError) {
+      console.error('MongoDB 写入失败:', mongoError.message)
+      throw mongoError // 如果完全依赖 MongoDB，这里应该抛出错误
+    }
 
     // 完成
     progressStore.set(100, '')

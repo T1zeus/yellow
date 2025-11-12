@@ -1,7 +1,7 @@
 /**
  * 结果相关接口
  */
-import { get } from './api'
+import { get, del } from './api'
 
 /**
  * 获取结果记录列表（文件夹列表）
@@ -12,22 +12,29 @@ export const getRecords = async () => {
 }
 
 /**
- * 获取结果文件列表（保留兼容性，返回根目录下的文件）
- * @returns {Promise<{files: Array, count: number, resultDir: string}>}
+ * 获取指定记录的完整数据（从 MongoDB）
+ * @param {string} recordId - 记录ID（文件夹名）
+ * @returns {Promise<{recordId, createdAt, updatedAt, statistics, files, tables}>}
  */
-export const getResults = async () => {
-  return get('/api/results')
+export const getRecordData = async (recordId) => {
+  return get(`/api/records/${encodeURIComponent(recordId)}/data`)
 }
 
 /**
- * 下载结果文件（支持从指定记录文件夹下载）
- * @param {string} filename - 文件名
- * @param {string} recordId - 记录ID（文件夹名），可选
+ * 从 MongoDB 导出 Excel 文件
+ * @param {string} recordId - 记录ID
+ * @param {string} tableKey - 表格类型（result, merge, transactions, abnormal_accounts, shopping, risk_hotspot, risk_population, risk_shopping）
  * @returns {Promise<Blob>}
  */
-export const downloadResultFile = async (filename, recordId = null) => {
-  if (recordId) {
-    return get(`/api/files/${recordId}/${filename}`)
-  }
-  return get(`/files/${filename}`)
+export const exportRecordFile = async (recordId, tableKey) => {
+  return get(`/api/export/${encodeURIComponent(recordId)}/${tableKey}`)
+}
+
+/**
+ * 删除记录
+ * @param {string} recordId - 记录ID（文件夹名）
+ * @returns {Promise<{status: string, message: string}>}
+ */
+export const deleteRecord = async (recordId) => {
+  return del(`/api/records/${encodeURIComponent(recordId)}`)
 }

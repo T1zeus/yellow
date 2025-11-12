@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { Card, Form, Upload, Button, message, Progress, Space } from 'antd';
-import { UploadOutlined } from '@ant-design/icons';
+import { Card, Form, Upload, Button, message, Progress, Space, Modal, List, Tag } from 'antd';
+import { UploadOutlined, FileOutlined, EyeOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { uploadFiles } from '../../services/uploadService';
 import { getProgress } from '../../services/uploadService';
@@ -21,6 +21,11 @@ const UploadPage = () => {
     roommate_file: [],
     transaction_files: [],
     hotel_files: [],
+  });
+  const [fileListModal, setFileListModal] = useState({
+    visible: false,
+    title: '',
+    files: [],
   });
   const progressTimerRef = useRef(null);
   const navigate = useNavigate();
@@ -46,7 +51,7 @@ const UploadPage = () => {
 
       if (data.percent >= 100 || data.percent === -1) {
         clearInterval(progressTimerRef.current);
-        progressTimerRef.current = null; // 添加这行
+        progressTimerRef.current = null; 
         setUploading(false);
         
         if (data.percent === -1) {
@@ -175,12 +180,33 @@ const UploadPage = () => {
     return false;
   };
 
+  const handleViewFiles = (fieldName, label) => {
+    const files = fileList[fieldName] || [];
+    setFileListModal({
+      visible: true,
+      title: `${label} - 文件列表 (${files.length} 个文件)`,
+      files: files.map((file, index) => ({
+        key: file.uid || index,
+        name: file.name || file.originFileObj?.name || '未知文件',
+        size: file.size || file.originFileObj?.size || 0,
+      })),
+    });
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+  };
+
   return (
     <div className='upload-page'>
       <Card title="上传分析文件">
         <div className='upload-container'>
           <Form form={form} layout="vertical" onFinish={onFinish}>
-            <Form.Item label="简要案情（Excel）" name="criminal_file">
+            <Form.Item label="简要案情/criminal_file（Excel）" name="criminal_file">
               <Upload
                 accept=".xlsx,.xls"
                 fileList={fileList.criminal_file}
@@ -193,7 +219,7 @@ const UploadPage = () => {
               </Upload>
             </Form.Item>
 
-            <Form.Item label="实有人口（Excel）" name="population_file">
+            <Form.Item label="实有人口/population_file（Excel）" name="population_file">
               <Upload
                 accept=".xlsx,.xls"
                 fileList={fileList.population_file}
@@ -206,7 +232,7 @@ const UploadPage = () => {
               </Upload>
             </Form.Item>
 
-            <Form.Item label="从业人员（Excel）" name="employment_file">
+            <Form.Item label="从业人员/employment_file（Excel）" name="employment_file">
               <Upload
                 accept=".xlsx,.xls"
                 fileList={fileList.employment_file}
@@ -219,7 +245,7 @@ const UploadPage = () => {
               </Upload>
             </Form.Item>
 
-            <Form.Item label="社保（Excel）" name="insurance_file">
+            <Form.Item label="社保/insurance_file（Excel）" name="insurance_file">
               <Upload
                 accept=".xlsx,.xls"
                 fileList={fileList.insurance_file}
@@ -232,7 +258,7 @@ const UploadPage = () => {
               </Upload>
             </Form.Item>
 
-            <Form.Item label="购物（Excel）" name="shopping_file">
+            <Form.Item label="购物/shopping_file（Excel）" name="shopping_file">
               <Upload
                 accept=".xlsx,.xls"
                 fileList={fileList.shopping_file}
@@ -245,7 +271,7 @@ const UploadPage = () => {
               </Upload>
             </Form.Item>
 
-            <Form.Item label="同住信息（Excel）" name="roommate_file">
+            <Form.Item label="同住信息/roommate_file（Excel）" name="roommate_file">
               <Upload
                 accept=".xlsx,.xls"
                 fileList={fileList.roommate_file}
@@ -259,35 +285,93 @@ const UploadPage = () => {
             </Form.Item>
 
             <Form.Item 
-              label="资金交易（文件夹）" 
+              label="资金交易/transaction_files（文件夹）" 
               name="transaction_files"
               help="支持上传整个文件夹，保持目录结构"
             >
-              <Upload
-                directory
-                fileList={fileList.transaction_files}
-                onChange={handleFileChange('transaction_files')}
-                onRemove={handleRemove('transaction_files')}
-                beforeUpload={(file) => beforeUpload(file, 'transaction_files')}
-              >
-                <Button icon={<UploadOutlined />}>点击上传文件夹</Button>
-              </Upload>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Upload
+                  directory
+                  fileList={[]}
+                  showUploadList={false}
+                  onChange={handleFileChange('transaction_files')}
+                  beforeUpload={(file) => beforeUpload(file, 'transaction_files')}
+                >
+                  <Button icon={<UploadOutlined />}>点击上传文件夹</Button>
+                </Upload>
+                {fileList.transaction_files.length > 0 && (
+                  <Space>
+                    <Tag color="blue" style={{ fontSize: '14px', padding: '4px 12px' }}>
+                      <FileOutlined /> 已选择 {fileList.transaction_files.length} 个文件
+                    </Tag>
+                    <Button 
+                      type="link" 
+                      icon={<EyeOutlined />}
+                      onClick={() => handleViewFiles('transaction_files', '资金交易')}
+                    >
+                      查看文件
+                    </Button>
+                    <Button 
+                      type="link" 
+                      danger
+                      onClick={() => {
+                        setFileList(prev => ({
+                          ...prev,
+                          transaction_files: [],
+                        }));
+                        message.success('已清空文件列表');
+                      }}
+                    >
+                      清空
+                    </Button>
+                  </Space>
+                )}
+              </Space>
             </Form.Item>
 
             <Form.Item 
-              label="酒店入住（文件夹）" 
+              label="酒店入住/hotel_files（文件夹）" 
               name="hotel_files"
               help="支持上传整个文件夹，包含女性入住和入住男性文件"
             >
-              <Upload
-                directory
-                fileList={fileList.hotel_files}
-                onChange={handleFileChange('hotel_files')}
-                onRemove={handleRemove('hotel_files')}
-                beforeUpload={(file) => beforeUpload(file, 'hotel_files')}
-              >
-                <Button icon={<UploadOutlined />}>点击上传文件夹</Button>
-              </Upload>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Upload
+                  directory
+                  fileList={[]}
+                  showUploadList={false}
+                  onChange={handleFileChange('hotel_files')}
+                  beforeUpload={(file) => beforeUpload(file, 'hotel_files')}
+                >
+                  <Button icon={<UploadOutlined />}>点击上传文件夹</Button>
+                </Upload>
+                {fileList.hotel_files.length > 0 && (
+                  <Space>
+                    <Tag color="blue" style={{ fontSize: '14px', padding: '4px 12px' }}>
+                      <FileOutlined /> 已选择 {fileList.hotel_files.length} 个文件
+                    </Tag>
+                    <Button 
+                      type="link" 
+                      icon={<EyeOutlined />}
+                      onClick={() => handleViewFiles('hotel_files', '酒店入住')}
+                    >
+                      查看文件
+                    </Button>
+                    <Button 
+                      type="link" 
+                      danger
+                      onClick={() => {
+                        setFileList(prev => ({
+                          ...prev,
+                          hotel_files: [],
+                        }));
+                        message.success('已清空文件列表');
+                      }}
+                    >
+                      清空
+                    </Button>
+                  </Space>
+                )}
+              </Space>
             </Form.Item>
 
             {uploading && (
@@ -322,6 +406,36 @@ const UploadPage = () => {
           </Form>
         </div>
       </Card>
+
+      <Modal
+        title={fileListModal.title}
+        open={fileListModal.visible}
+        onCancel={() => setFileListModal({ visible: false, title: '', files: [] })}
+        footer={[
+          <Button key="close" onClick={() => setFileListModal({ visible: false, title: '', files: [] })}>
+            关闭
+          </Button>
+        ]}
+        width={600}
+      >
+        <List
+          dataSource={fileListModal.files}
+          renderItem={(item) => (
+            <List.Item>
+              <List.Item.Meta
+                avatar={<FileOutlined style={{ fontSize: '20px', color: '#1890ff' }} />}
+                title={item.name}
+                description={`文件大小: ${formatFileSize(item.size)}`}
+              />
+            </List.Item>
+          )}
+          pagination={{
+            pageSize: 10,
+            showSizeChanger: true,
+            showTotal: (total) => `共 ${total} 个文件`,
+          }}
+        />
+      </Modal>
     </div>
   );
 };

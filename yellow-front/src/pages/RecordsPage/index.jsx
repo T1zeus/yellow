@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
-import { Card, Table, Button, Space, Tag, message } from 'antd';
-import { EyeOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Card, Table, Button, Space, Tag, message, Modal } from 'antd';
+import { EyeOutlined, ReloadOutlined, DeleteOutlined } from '@ant-design/icons';
+import { ExclamationCircleOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
-import { getRecords } from '../../services/resultService';
+import { getRecords, deleteRecord } from '../../services/resultService';
 
 const RecordsPage = () => {
     const [data, setData] = useState([]);
@@ -40,6 +41,27 @@ const RecordsPage = () => {
 
     const handleViewDetail = (recordId) => {
         navigate(`/record/${encodeURIComponent(recordId)}`);
+    };
+
+    const handleDelete = (record) => {
+        Modal.confirm({
+            title: '确认删除',
+            icon: <ExclamationCircleOutlined />,
+            content: `确定要删除记录 "${record.name}" 吗？此操作将把记录移动到系统回收站，可以从回收站恢复。`,
+            okText: '确定',
+            okType: 'danger',
+            cancelText: '取消',
+            onOk: async () => {
+                try {
+                    await deleteRecord(record.id);
+                    message.success('已移动到回收站');
+                    loadRecordList(); // 刷新列表
+                } catch (error) {
+                    console.error('删除失败:', error);
+                    message.error('删除失败: ' + error.message);
+                }
+            },
+        });
     };
 
     const columns = [
@@ -80,7 +102,7 @@ const RecordsPage = () => {
         {
             title: '操作',
             key: 'action',
-            width: 150,
+            width: 200,
             render: (_, record) => (
                 <Space>
                     <Button 
@@ -89,6 +111,14 @@ const RecordsPage = () => {
                         onClick={() => handleViewDetail(record.id)}
                     >
                         查看详情
+                    </Button>
+                    <Button 
+                        type="link" 
+                        danger
+                        icon={<DeleteOutlined />}
+                        onClick={() => handleDelete(record)}
+                    >
+                        删除
                     </Button>
                 </Space>
             ),

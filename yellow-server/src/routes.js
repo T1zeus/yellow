@@ -3,8 +3,13 @@ const path = require('path')
 const fs = require('fs')
 const iconv = require('iconv-lite')
 const { Router } = require('express')
+const { exec } = require('child_process')
+const { promisify } = require('util')
+const { MongoClient } = require('mongodb')
 const { progressStore } = require('./stores/progressStore')
 const { runPipelineNode } = require('./services/pipelineService')
+
+const execAsync = promisify(exec)
 
 const router = Router()
 
@@ -240,7 +245,7 @@ router.post('/upload', upload.any(), async (req, res) => {
    // 启动后台处理（异步）
     ;(async () => {
       try {
-        await runPipelineNode({ RESULT_DIR, fileMap })
+        await runPipelineNode({ fileMap })
       } catch (error) {
         console.error('后台处理失败:', error)
         progressStore.set(-1, error.message)
@@ -264,151 +269,259 @@ router.get('/progress', (req, res) => {
   res.json({ percent, error })
 })
 
-// 结果记录列表查询接口（返回文件夹列表）
-router.get('/records', (req, res) => {
+// 结果记录列表查询接口（从 MongoDB 读取）
+router.get('/records', async (req, res) => {
   try {
-    if (!fs.existsSync(RESULT_DIR)) {
-      return res.json({ records: [] })
+    const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017'
+    const DB_NAME = process.env.MONGO_DB_NAME || 'yellow_db'
+    const client = new MongoClient(MONGO_URI)
+    
+    try {
+      await client.connect()
+      const db = client.db(DB_NAME)
+      const collection = db.collection('analysis_records')
+      
+      // 从 MongoDB 读取所有记录
+      const records = await collection.find({}).sort({ createdAt: -1 }).toArray()
+      
+      const recordList = records.map(record => ({
+        id: record.recordId,
+        name: record.recordId,
+        fileCount: record.files?.length || 0,
+        files: (record.files || []).map(file => ({
+          name: file.fileName,
+          size: 0, // MongoDB 中没有文件大小
+          sizeFormatted: `${file.rowCount || 0} 条记录`,
+        })),
+        createdTime: record.createdAt?.toISOString() || new Date().toISOString(),
+        createdTimeFormatted: record.createdAt ? new Date(record.createdAt).toLocaleString('zh-CN') : '',
+        modifiedTime: record.updatedAt?.toISOString() || new Date().toISOString(),
+        modifiedTimeFormatted: record.updatedAt ? new Date(record.updatedAt).toLocaleString('zh-CN') : '',
+      }))
+      
+      res.json({ 
+        records: recordList,
+        count: recordList.length,
+      })
+    } catch (mongoError) {
+      console.error('[MongoDB] 查询记录列表失败:', mongoError.message)
+      res.status(500).json({ error: '查询记录列表失败: ' + mongoError.message })
+    } finally {
+      await client.close()
     }
-
-    const items = fs.readdirSync(RESULT_DIR)
-    const recordList = items
-      .filter(item => {
-        const itemPath = path.join(RESULT_DIR, item)
-        return fs.statSync(itemPath).isDirectory()
-      })
-      .map(item => {
-        const itemPath = path.join(RESULT_DIR, item)
-        const stats = fs.statSync(itemPath)
-        
-        // 获取文件夹内的文件列表
-        const files = fs.readdirSync(itemPath)
-          .filter(file => {
-            const filePath = path.join(itemPath, file)
-            // 过滤掉临时文件（以 ~$ 开头的文件）
-            if (file.startsWith('~$')) {
-              return false
-            }
-            return fs.statSync(filePath).isFile() && (file.endsWith('.xlsx') || file.endsWith('.xls'))
-          })
-          .map(file => {
-            const filePath = path.join(itemPath, file)
-            const fileStats = fs.statSync(filePath)
-            return {
-              name: file,
-              size: fileStats.size,
-              sizeFormatted: formatFileSize(fileStats.size),
-            }
-          })
-        
-        return {
-          id: item,
-          name: item,
-          fileCount: files.length,
-          files: files,
-          createdTime: stats.birthtime.toISOString(),
-          createdTimeFormatted: stats.birthtime.toLocaleString('zh-CN'),
-          modifiedTime: stats.mtime.toISOString(),
-          modifiedTimeFormatted: stats.mtime.toLocaleString('zh-CN'),
-        }
-      })
-      .sort((a, b) => b.createdTime.localeCompare(a.createdTime)) // 按创建时间倒序
-
-    res.json({ 
-      records: recordList,
-      count: recordList.length,
-    })
   } catch (error) {
     console.error('获取记录列表失败:', error)
     res.status(500).json({ error: '获取记录列表失败: ' + error.message })
   }
 })
 
-// 结果文件列表查询接口（保留兼容性，返回根目录下的文件）
-router.get('/results', (req, res) => {
+// 获取指定记录的完整数据（从 MongoDB）
+router.get('/records/:recordId/data', async (req, res) => {
   try {
-    if (!fs.existsSync(RESULT_DIR)) {
-      return res.json({ files: [] })
+    const { recordId } = req.params
+    const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017'
+    const DB_NAME = process.env.MONGO_DB_NAME || 'yellow_db'
+    const client = new MongoClient(MONGO_URI)
+    
+    try {
+      await client.connect()
+      const db = client.db(DB_NAME)
+      const collection = db.collection('analysis_records')
+      
+      const record = await collection.findOne({ recordId })
+      
+      if (!record) {
+        return res.status(404).json({ error: '记录不存在' })
+      }
+      
+      // 返回完整记录数据（包含 tables, statistics, files 等）
+      res.json({
+        recordId: record.recordId,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+        statistics: record.statistics || {},
+        files: record.files || [],
+        tables: record.tables || {},
+      })
+    } catch (mongoError) {
+      console.error('[MongoDB] 查询记录失败:', mongoError.message)
+      res.status(500).json({ error: '查询记录失败: ' + mongoError.message })
+    } finally {
+      await client.close()
     }
-
-    const files = fs.readdirSync(RESULT_DIR)
-    const fileList = files
-      .filter(file => {
-        const filePath = path.join(RESULT_DIR, file)
-        // 过滤掉临时文件（以 ~$ 开头的文件）和文件夹
-        if (file.startsWith('~$')) {
-          return false
-        }
-        return fs.statSync(filePath).isFile() && (file.endsWith('.xlsx') || file.endsWith('.xls'))
-      })
-      .map(file => {
-        const filePath = path.join(RESULT_DIR, file)
-        const stats = fs.statSync(filePath)
-        return {
-          name: file,
-          size: stats.size,
-          sizeFormatted: formatFileSize(stats.size),
-          modifiedTime: stats.mtime.toISOString(),
-          modifiedTimeFormatted: stats.mtime.toLocaleString('zh-CN'),
-          url: `/files/${file}`,
-        }
-      })
-      .sort((a, b) => b.modifiedTime.localeCompare(a.modifiedTime)) // 按修改时间倒序
-
-    res.json({ 
-      files: fileList,
-      count: fileList.length,
-      resultDir: RESULT_DIR
-    })
   } catch (error) {
-    console.error('获取结果文件列表失败:', error)
-    res.status(500).json({ error: '获取结果文件列表失败: ' + error.message })
+    console.error('获取记录数据失败:', error)
+    res.status(500).json({ error: '获取记录数据失败: ' + error.message })
   }
 })
 
-/**
- * 格式化文件大小
- * @param {number} bytes - 字节数
- * @returns {string} 格式化后的文件大小
- */
-function formatFileSize(bytes) {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
-}
 
-// 文件下载接口（支持从指定记录文件夹下载）
-// 注意：这个路由需要在 express.static 之前注册，否则会被静态文件服务拦截
-router.get('/files/:recordId/:filename', (req, res) => {
+// 删除记录接口（移动到系统回收站）
+router.delete('/records/:recordId', async (req, res) => {
   try {
-    const { recordId, filename } = req.params
-    const filePath = path.join(RESULT_DIR, recordId, filename)
+    const { recordId } = req.params
+    const recordPath = path.join(RESULT_DIR, recordId)
     
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: '文件不存在' })
-    }
-    
-    // 安全检查：确保文件路径在 RESULT_DIR 内
-    const resolvedPath = path.resolve(filePath)
+    // 安全检查：确保路径在 RESULT_DIR 内
+    const resolvedPath = path.resolve(recordPath)
     const resolvedResultDir = path.resolve(RESULT_DIR)
     if (!resolvedPath.startsWith(resolvedResultDir)) {
       return res.status(403).json({ error: '访问被拒绝' })
     }
     
-    res.download(filePath, filename, (err) => {
-      if (err) {
-        console.error('下载文件失败:', err)
-        if (!res.headersSent) {
-          res.status(500).json({ error: '下载文件失败' })
-        }
+    if (!fs.existsSync(recordPath)) {
+      return res.status(404).json({ error: '记录不存在' })
+    }
+    
+    // 检查是否为目录
+    if (!fs.statSync(recordPath).isDirectory()) {
+      return res.status(400).json({ error: '指定的路径不是目录' })
+    }
+    
+    // 删除 MongoDB 中的记录
+    const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017'
+    const DB_NAME = process.env.MONGO_DB_NAME || 'yellow_db'
+    const client = new MongoClient(MONGO_URI)
+    
+    let mongoDeleted = false
+    try {
+      await client.connect()
+      const db = client.db(DB_NAME)
+      const collection = db.collection('analysis_records')
+      
+      const result = await collection.deleteOne({ recordId })
+      if (result.deletedCount > 0) {
+        mongoDeleted = true
+        console.log(`[MongoDB] 已删除记录: ${recordId}`)
+      } else {
+        console.log(`[MongoDB] 记录不存在或已删除: ${recordId}`)
       }
-    })
+    } catch (mongoError) {
+      console.error('[MongoDB] 删除记录失败:', mongoError.message)
+      // 不中断流程，继续删除文件系统
+    } finally {
+      await client.close()
+    }
+    
+    // 使用 PowerShell 将文件夹移动到系统回收站
+    // 转义路径中的特殊字符
+    const escapedPath = recordPath.replace(/'/g, "''").replace(/"/g, '`"')
+    
+    // PowerShell 命令：使用 FileSystem.DeleteDirectory 移动到回收站
+    const powershellCommand = `powershell -Command "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory('${escapedPath}', 'OnlyErrorDialogs', 'SendToRecycleBin')"`
+    
+    try {
+      await execAsync(powershellCommand)
+      console.log(`记录已移动到系统回收站: ${recordPath}`)
+      
+      res.json({ 
+        status: 'success',
+        message: '记录已移动到回收站' + (mongoDeleted ? '，数据库记录已删除' : '')
+      })
+    } catch (execError) {
+      // 如果 PowerShell 命令失败，尝试直接删除（兼容性处理）
+      console.warn('移动到回收站失败，尝试直接删除:', execError.message)
+      fs.rmSync(recordPath, { recursive: true, force: true })
+      console.log(`记录已删除: ${recordPath}`)
+      
+      res.json({ 
+        status: 'success',
+        message: '记录删除成功' + (mongoDeleted ? '，数据库记录已删除' : '')
+      })
+    }
   } catch (error) {
-    console.error('下载文件失败:', error)
-    res.status(500).json({ error: '下载文件失败: ' + error.message })
+    console.error('删除记录失败:', error)
+    res.status(500).json({ error: '删除记录失败: ' + error.message })
   }
 })
+
+// 从 MongoDB 导出 Excel 文件接口
+router.get('/export/:recordId/:tableKey', async (req, res) => {
+  try {
+    const { recordId, tableKey } = req.params
+    const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017'
+    const DB_NAME = process.env.MONGO_DB_NAME || 'yellow_db'
+    const client = new MongoClient(MONGO_URI)
+    
+    try {
+      await client.connect()
+      const db = client.db(DB_NAME)
+      const collection = db.collection('analysis_records')
+      
+      const record = await collection.findOne({ recordId })
+      
+      if (!record) {
+        return res.status(404).json({ error: '记录不存在' })
+      }
+      
+      // 映射 tableKey 到文件名
+      const FILE_MAP = {
+        'result': 'result.xlsx',
+        'merge': 'merge.xlsx',
+        'transactions': 'transactions.xlsx',
+        'abnormal_accounts': '可疑收款账号.xlsx',
+        'shopping': 'shopping.xlsx',
+        'risk_hotspot': '高风险地点统计.xlsx',
+        'risk_population': '实口地址高风险统计.xlsx',
+        'risk_shopping': '外卖收货地址高风险统计.xlsx',
+      }
+      
+      const fileName = FILE_MAP[tableKey]
+      if (!fileName) {
+        return res.status(400).json({ error: '无效的表格类型' })
+      }
+      
+      const data = record.tables?.[tableKey] || []
+      
+      // 使用 excelService 生成 Excel
+      const { writeArrayToExcel } = require('./services/excelService')
+      
+      // 处理数据，准备导出
+      const processedData = data.map(row => ({ ...row }))
+      
+      // 创建临时文件路径
+      const tempDir = path.join(__dirname, '..', 'data', 'temp')
+      fs.mkdirSync(tempDir, { recursive: true })
+      const tempFilePath = path.join(tempDir, `${recordId}_${tableKey}_${Date.now()}.xlsx`)
+      
+      // 导出选项
+      const exportOptions = {
+        excludeFields: ['异常资金', '入住次数', '同住男人数', '前科次数', '前科人员', '前科情况']
+      }
+      
+      // 某些表格不需要排除字段
+      if (tableKey === 'result' || tableKey === 'merge') {
+        delete exportOptions.excludeFields
+      }
+      
+      // 写入 Excel 文件
+      writeArrayToExcel(processedData, tempFilePath, exportOptions)
+      
+      // 发送文件
+      res.download(tempFilePath, fileName, (err) => {
+        // 删除临时文件
+        if (fs.existsSync(tempFilePath)) {
+          fs.unlinkSync(tempFilePath)
+        }
+        
+        if (err) {
+          console.error('下载文件失败:', err)
+          if (!res.headersSent) {
+            res.status(500).json({ error: '下载文件失败' })
+          }
+        }
+      })
+    } catch (mongoError) {
+      console.error('[MongoDB] 导出文件失败:', mongoError.message)
+      res.status(500).json({ error: '导出文件失败: ' + mongoError.message })
+    } finally {
+      await client.close()
+    }
+  } catch (error) {
+    console.error('导出文件失败:', error)
+    res.status(500).json({ error: '导出文件失败: ' + error.message })
+  }
+})
+
 
 module.exports = router
