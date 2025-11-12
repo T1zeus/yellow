@@ -1,7 +1,7 @@
 /**
  * 结果相关接口
  */
-import { get, del } from './api'
+import { get, del, put } from './api'
 
 /**
  * 获取结果记录列表（文件夹列表）
@@ -28,6 +28,16 @@ export const getRecordData = async (recordId) => {
  */
 export const exportRecordFile = async (recordId, tableKey) => {
   return get(`/api/export/${encodeURIComponent(recordId)}/${tableKey}`)
+}
+
+/**
+ * 更新记录数据
+ * @param {string} recordId - 记录ID
+ * @param {Array} updates - 更新数据数组，每个元素包含 { idNumber, fields }
+ * @returns {Promise<{status: string, message: string, updatedCount: number}>}
+ */
+export const updateRecordData = async (recordId, updates) => {
+  return put(`/api/records/${encodeURIComponent(recordId)}/data`, { updates })
 }
 
 /**

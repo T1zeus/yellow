@@ -355,6 +355,90 @@ router.get('/records/:recordId/data', async (req, res) => {
   }
 })
 
+// 更新指定记录的数据（从 MongoDB）
+router.put('/records/:recordId/data', async (req, res) => {
+  try {
+    const { recordId } = req.params
+    const { updates } = req.body // updates 是一个数组，每个元素包含 { idNumber, fields }
+    
+    if (!updates || !Array.isArray(updates) || updates.length === 0) {
+      return res.status(400).json({ error: '更新数据不能为空' })
+    }
+    
+    const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017'
+    const DB_NAME = process.env.MONGO_DB_NAME || 'yellow_db'
+    const client = new MongoClient(MONGO_URI)
+    
+    try {
+      await client.connect()
+      const db = client.db(DB_NAME)
+      const collection = db.collection('analysis_records')
+      
+      const record = await collection.findOne({ recordId })
+      
+      if (!record) {
+        return res.status(404).json({ error: '记录不存在' })
+      }
+      
+      // 获取 result 表格数据
+      const resultData = record.tables?.result || []
+      
+      // 创建证件号码到索引的映射
+      const idNumberMap = new Map()
+      resultData.forEach((row, index) => {
+        const idNumber = String(row['证件号码'] || '').trim()
+        if (idNumber) {
+          idNumberMap.set(idNumber, index)
+        }
+      })
+      
+      // 应用更新
+      let updatedCount = 0
+      updates.forEach(({ idNumber, fields }) => {
+        const index = idNumberMap.get(String(idNumber).trim())
+        if (index !== undefined) {
+          // 更新对应行的字段
+          Object.keys(fields).forEach(field => {
+            resultData[index][field] = fields[field]
+          })
+          updatedCount++
+        }
+      })
+      
+      if (updatedCount === 0) {
+        return res.status(400).json({ error: '没有找到要更新的记录' })
+      }
+      
+      // 更新 MongoDB 中的记录
+      const now = new Date()
+      await collection.updateOne(
+        { recordId },
+        {
+          $set: {
+            'tables.result': resultData,
+            updatedAt: now,
+          },
+        }
+      )
+      
+      console.log(`[MongoDB] 已更新记录: ${recordId}，更新了 ${updatedCount} 条数据`)
+      
+      res.json({
+        status: 'success',
+        message: `成功更新 ${updatedCount} 条记录`,
+        updatedCount,
+      })
+    } catch (mongoError) {
+      console.error('[MongoDB] 更新记录失败:', mongoError.message)
+      res.status(500).json({ error: '更新记录失败: ' + mongoError.message })
+    } finally {
+      await client.close()
+    }
+  } catch (error) {
+    console.error('更新记录数据失败:', error)
+    res.status(500).json({ error: '更新记录数据失败: ' + error.message })
+  }
+})
 
 // 删除记录接口（移动到系统回收站）
 router.delete('/records/:recordId', async (req, res) => {

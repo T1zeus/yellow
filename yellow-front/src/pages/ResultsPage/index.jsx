@@ -4,7 +4,7 @@ import { Button, Card, Table, Tag, Input, Space,
 import zhCN from 'antd/locale/zh_CN';
 import { SearchOutlined, SaveOutlined, WarningOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
-import { getRecordData } from '../../services/resultService';
+import { getRecordData, updateRecordData } from '../../services/resultService';
 import './index.less';
 const { Search } = Input;
 const { TabPane } = Tabs;
@@ -113,6 +113,11 @@ const ResultsPage = () => {
         pageSize: 20,
     });
 
+    // 编辑状态管理（记录正在编辑的单元格）
+    const [editingCell, setEditingCell] = useState(null); // { idNumber: 'xxx', field: '案由' }
+    // 编辑数据管理（记录所有修改）
+    const [editingData, setEditingData] = useState({}); // { idNumber: { field: value } }
+
     // 使用 useCallback 稳定 loadResultData 的引用，避免 useEffect 报 missing dependency
     const loadResultData = useCallback(async () => {
         setLoading(true);
@@ -191,6 +196,54 @@ const ResultsPage = () => {
             setHighRiskLoading(false);
         }
     }, [id]);
+
+    // 处理字段编辑（只更新本地状态，不保存）
+    const handleFieldChange = useCallback((idNumber, field, value) => {
+        setEditingData(prev => {
+            const newData = { ...prev };
+            if (!newData[idNumber]) {
+                newData[idNumber] = {};
+            }
+            newData[idNumber][field] = value;
+            return newData;
+        });
+        
+        // 同时更新本地显示数据
+        const newData = [...data];
+        const index = newData.findIndex(item => item['证件号码'] === idNumber);
+        if (index !== -1) {
+            newData[index][field] = value;
+            setData(newData);
+        }
+    }, [data]);
+
+    // 批量保存所有编辑的数据
+    const handleSave = useCallback(async () => {
+        const recordId = decodeURIComponent(id);
+        const updates = Object.keys(editingData).map(idNumber => ({
+            idNumber,
+            fields: editingData[idNumber],
+        }));
+
+        if (updates.length === 0) {
+            message.info('没有需要保存的修改');
+            return;
+        }
+
+        try {
+            const result = await updateRecordData(recordId, updates);
+            message.success(result.message || `成功保存 ${result.updatedCount} 条记录`);
+            
+            // 清空编辑状态
+            setEditingData({});
+            
+            // 重新加载数据
+            await loadResultData();
+        } catch (error) {
+            console.error('保存失败:', error);
+            message.error('保存失败: ' + (error?.message || String(error)));
+        }
+    }, [id, editingData, loadResultData]);
 
     useEffect(() => {
         if (id) {
@@ -315,45 +368,6 @@ const ResultsPage = () => {
         });
     };
 
-    // TODO: 需要后端提供保存接口 /api/save_result
-    // 当前只是收集数据，实际保存需要调用 API
-    const handleSave = async () => {
-        try {
-            // 收集可编辑字段的数据
-            const saveData = filteredData.map(row => ({
-                姓名: row['姓名'],
-                证件号码: row['证件号码'],
-                手机号码: row['手机号码'],
-                预警状态: row['预警状态'],
-                更新时间: row['更新时间'],
-                户籍地址: row['户籍地址'],
-                居住地址: row['居住地址'],
-                所属辖区: row['所属辖区'],
-                从业单位: row['从业单位'],
-                社保情况: row['社保情况'],
-            }));
-
-            console.log('要保存的数据:', saveData);
-            
-            // TODO: 取消注释下面的代码，并确保后端有对应的接口
-            // const response = await fetch('/api/save_result', {
-            //     method: 'POST',
-            //     headers: { 'Content-Type': 'application/json' },
-            //     body: JSON.stringify(saveData),
-            // });
-            // const result = await response.json();
-            // if (result.status === 'success') {
-            //     message.success('保存成功！');
-            // } else {
-            //     message.error('保存失败: ' + (result.error || '未知错误'));
-            // }
-            
-            message.success('保存功能待实现（需要后端接口支持）');
-        } catch (error) {
-            console.error('保存失败:', error);
-            message.error('保存失败: ' + error.message);
-        }
-    };
 
 
     // 显示前科详情弹窗
@@ -516,10 +530,31 @@ const ResultsPage = () => {
                 }
                 return String(record['案由'] || '').trim() === value;
             },
-            render: (text) => {
-                if (!text) return '-';
-                // 将逗号、顿号、分号等分隔符拆分，让每个分类单独一行显示
-                const categories = String(text)
+            render: (text, record) => {
+                const idNumber = String(record['证件号码'] || '').trim();
+                const isEditing = editingCell?.idNumber === idNumber && editingCell?.field === '案由';
+                
+                if (isEditing) {
+                    const editedValue = editingData[idNumber]?.['案由'];
+                    const displayValue = editedValue !== undefined ? editedValue : text;
+                    return (
+                        <Input
+                            value={displayValue || ''}
+                            autoFocus
+                            onChange={(e) => handleFieldChange(idNumber, '案由', e.target.value)}
+                            onBlur={() => setEditingCell(null)}
+                            onPressEnter={() => setEditingCell(null)}
+                            size="small"
+                            style={{ width: '100%' }}
+                        />
+                    );
+                }
+                
+                // 保持原有格式，显示编辑后的值
+                const editedValue = editingData[idNumber]?.['案由'];
+                const displayValue = editedValue !== undefined ? editedValue : text;
+                if (!displayValue) return '-';
+                const categories = String(displayValue)
                     .split(/[,，、;；]/)
                     .map(cat => cat.trim())
                     .filter(cat => cat);
@@ -527,10 +562,14 @@ const ResultsPage = () => {
                 if (categories.length === 0) return '-';
                 
                 return (
-                    <div style={{ 
-                        lineHeight: '1.6',
-                        wordBreak: 'break-word'
-                    }}>
+                    <div 
+                        style={{ 
+                            lineHeight: '1.6',
+                            wordBreak: 'break-word',
+                            cursor: 'pointer'
+                        }}
+                        onDoubleClick={() => setEditingCell({ idNumber, field: '案由' })}
+                    >
                         {categories.map((cat, index) => (
                             <div key={index} style={{ 
                                 marginBottom: index < categories.length - 1 ? '4px' : 0
@@ -554,6 +593,37 @@ const ResultsPage = () => {
                 }
                 return String(record['案发地点'] || '').trim() === value;
             },
+            render: (text, record) => {
+                const idNumber = String(record['证件号码'] || '').trim();
+                const isEditing = editingCell?.idNumber === idNumber && editingCell?.field === '案发地点';
+                
+                if (isEditing) {
+                    const editedValue = editingData[idNumber]?.['案发地点'];
+                    const displayValue = editedValue !== undefined ? editedValue : text;
+                    return (
+                        <Input
+                            value={displayValue || ''}
+                            autoFocus
+                            onChange={(e) => handleFieldChange(idNumber, '案发地点', e.target.value)}
+                            onBlur={() => setEditingCell(null)}
+                            onPressEnter={() => setEditingCell(null)}
+                            size="small"
+                            style={{ width: '100%' }}
+                        />
+                    );
+                }
+                
+                const editedValue = editingData[idNumber]?.['案发地点'];
+                const displayValue = editedValue !== undefined ? editedValue : text;
+                return (
+                    <div 
+                        style={{ cursor: 'pointer' }}
+                        onDoubleClick={() => setEditingCell({ idNumber, field: '案发地点' })}
+                    >
+                        {displayValue || '-'}
+                    </div>
+                );
+            },
         },
         {
             title: '户籍地址',
@@ -567,6 +637,37 @@ const ResultsPage = () => {
                 }
                 return String(record['户籍地址'] || '').trim() === value;
             },
+            render: (text, record) => {
+                const idNumber = String(record['证件号码'] || '').trim();
+                const isEditing = editingCell?.idNumber === idNumber && editingCell?.field === '户籍地址';
+                
+                if (isEditing) {
+                    const editedValue = editingData[idNumber]?.['户籍地址'];
+                    const displayValue = editedValue !== undefined ? editedValue : text;
+                    return (
+                        <Input
+                            value={displayValue || ''}
+                            autoFocus
+                            onChange={(e) => handleFieldChange(idNumber, '户籍地址', e.target.value)}
+                            onBlur={() => setEditingCell(null)}
+                            onPressEnter={() => setEditingCell(null)}
+                            size="small"
+                            style={{ width: '100%' }}
+                        />
+                    );
+                }
+                
+                const editedValue = editingData[idNumber]?.['户籍地址'];
+                const displayValue = editedValue !== undefined ? editedValue : text;
+                return (
+                    <div 
+                        style={{ cursor: 'pointer' }}
+                        onDoubleClick={() => setEditingCell({ idNumber, field: '户籍地址' })}
+                    >
+                        {displayValue || '-'}
+                    </div>
+                );
+            },
         },
         {
             title: '居住地址',
@@ -579,6 +680,37 @@ const ResultsPage = () => {
                     return !record['居住地址'] || String(record['居住地址']).trim() === '';
                 }
                 return String(record['居住地址'] || '').trim() === value;
+            },
+            render: (text, record) => {
+                const idNumber = String(record['证件号码'] || '').trim();
+                const isEditing = editingCell?.idNumber === idNumber && editingCell?.field === '居住地址';
+                
+                if (isEditing) {
+                    const editedValue = editingData[idNumber]?.['居住地址'];
+                    const displayValue = editedValue !== undefined ? editedValue : text;
+                    return (
+                        <Input
+                            value={displayValue || ''}
+                            autoFocus
+                            onChange={(e) => handleFieldChange(idNumber, '居住地址', e.target.value)}
+                            onBlur={() => setEditingCell(null)}
+                            onPressEnter={() => setEditingCell(null)}
+                            size="small"
+                            style={{ width: '100%' }}
+                        />
+                    );
+                }
+                
+                const editedValue = editingData[idNumber]?.['居住地址'];
+                const displayValue = editedValue !== undefined ? editedValue : text;
+                return (
+                    <div 
+                        style={{ cursor: 'pointer' }}
+                        onDoubleClick={() => setEditingCell({ idNumber, field: '居住地址' })}
+                    >
+                        {displayValue || '-'}
+                    </div>
+                );
             },
         },
         {
@@ -614,6 +746,37 @@ const ResultsPage = () => {
                 }
                 return String(record['所属辖区'] || '').trim() === value;
             },
+            render: (text, record) => {
+                const idNumber = String(record['证件号码'] || '').trim();
+                const isEditing = editingCell?.idNumber === idNumber && editingCell?.field === '所属辖区';
+                
+                if (isEditing) {
+                    const editedValue = editingData[idNumber]?.['所属辖区'];
+                    const displayValue = editedValue !== undefined ? editedValue : text;
+                    return (
+                        <Input
+                            value={displayValue || ''}
+                            autoFocus
+                            onChange={(e) => handleFieldChange(idNumber, '所属辖区', e.target.value)}
+                            onBlur={() => setEditingCell(null)}
+                            onPressEnter={() => setEditingCell(null)}
+                            size="small"
+                            style={{ width: '100%' }}
+                        />
+                    );
+                }
+                
+                const editedValue = editingData[idNumber]?.['所属辖区'];
+                const displayValue = editedValue !== undefined ? editedValue : text;
+                return (
+                    <div 
+                        style={{ cursor: 'pointer' }}
+                        onDoubleClick={() => setEditingCell({ idNumber, field: '所属辖区' })}
+                    >
+                        {displayValue || '-'}
+                    </div>
+                );
+            },
         },
         {
             title: '从业单位',
@@ -627,6 +790,37 @@ const ResultsPage = () => {
                 }
                 return String(record['从业单位'] || '').trim() === value;
             },
+            render: (text, record) => {
+                const idNumber = String(record['证件号码'] || '').trim();
+                const isEditing = editingCell?.idNumber === idNumber && editingCell?.field === '从业单位';
+                
+                if (isEditing) {
+                    const editedValue = editingData[idNumber]?.['从业单位'];
+                    const displayValue = editedValue !== undefined ? editedValue : text;
+                    return (
+                        <Input
+                            value={displayValue || ''}
+                            autoFocus
+                            onChange={(e) => handleFieldChange(idNumber, '从业单位', e.target.value)}
+                            onBlur={() => setEditingCell(null)}
+                            onPressEnter={() => setEditingCell(null)}
+                            size="small"
+                            style={{ width: '100%' }}
+                        />
+                    );
+                }
+                
+                const editedValue = editingData[idNumber]?.['从业单位'];
+                const displayValue = editedValue !== undefined ? editedValue : text;
+                return (
+                    <div 
+                        style={{ cursor: 'pointer' }}
+                        onDoubleClick={() => setEditingCell({ idNumber, field: '从业单位' })}
+                    >
+                        {displayValue || '-'}
+                    </div>
+                );
+            },
         },
         {
             title: '社保情况',
@@ -639,6 +833,37 @@ const ResultsPage = () => {
                     return !record['社保情况'] || String(record['社保情况']).trim() === '';
                 }
                 return String(record['社保情况'] || '').trim() === value;
+            },
+            render: (text, record) => {
+                const idNumber = String(record['证件号码'] || '').trim();
+                const isEditing = editingCell?.idNumber === idNumber && editingCell?.field === '社保情况';
+                
+                if (isEditing) {
+                    const editedValue = editingData[idNumber]?.['社保情况'];
+                    const displayValue = editedValue !== undefined ? editedValue : text;
+                    return (
+                        <Input
+                            value={displayValue || ''}
+                            autoFocus
+                            onChange={(e) => handleFieldChange(idNumber, '社保情况', e.target.value)}
+                            onBlur={() => setEditingCell(null)}
+                            onPressEnter={() => setEditingCell(null)}
+                            size="small"
+                            style={{ width: '100%' }}
+                        />
+                    );
+                }
+                
+                const editedValue = editingData[idNumber]?.['社保情况'];
+                const displayValue = editedValue !== undefined ? editedValue : text;
+                return (
+                    <div 
+                        style={{ cursor: 'pointer' }}
+                        onDoubleClick={() => setEditingCell({ idNumber, field: '社保情况' })}
+                    >
+                        {displayValue || '-'}
+                    </div>
+                );
             },
         },
         {
@@ -788,7 +1013,45 @@ const ResultsPage = () => {
                 { text: '低', value: '低' },
             ],
             onFilter: (value, record) => record['预警状态'] === value,
-            render: renderRiskLevel,
+            render: (text, record) => {
+                const idNumber = String(record['证件号码'] || '').trim();
+                const isEditing = editingCell?.idNumber === idNumber && editingCell?.field === '预警状态';
+                
+                if (isEditing) {
+                    const editedValue = editingData[idNumber]?.['预警状态'];
+                    const displayValue = editedValue !== undefined ? editedValue : (text || '低');
+                    return (
+                        <Select
+                            value={displayValue}
+                            autoFocus
+                            open
+                            onChange={(value) => {
+                                handleFieldChange(idNumber, '预警状态', value);
+                                setEditingCell(null);
+                            }}
+                            onBlur={() => setEditingCell(null)}
+                            size="small"
+                            style={{ width: '100%' }}
+                        >
+                            <Select.Option value="高">高</Select.Option>
+                            <Select.Option value="中">中</Select.Option>
+                            <Select.Option value="低">低</Select.Option>
+                        </Select>
+                    );
+                }
+                
+                // 保持原有Tag格式，显示编辑后的值
+                const editedValue = editingData[idNumber]?.['预警状态'];
+                const displayValue = editedValue !== undefined ? editedValue : text;
+                return (
+                    <div 
+                        onDoubleClick={() => setEditingCell({ idNumber, field: '预警状态' })}
+                        style={{ cursor: 'pointer', display: 'inline-block' }}
+                    >
+                        {renderRiskLevel(displayValue)}
+                    </div>
+                );
+            },
         },
         {
             title: '更新时间',
@@ -1084,7 +1347,7 @@ const ResultsPage = () => {
                     )}
                 </Tabs>
 
-                {/* 修改点11：添加保存按钮 */}
+                {/* 保存编辑按钮 */}
                 <div style={{ 
                     position: 'fixed', 
                     bottom: 20, 
@@ -1096,6 +1359,8 @@ const ResultsPage = () => {
                         type="primary" 
                         icon={<SaveOutlined />}
                         onClick={handleSave}
+                        disabled={Object.keys(editingData).length === 0}
+                        size="large"
                     >
                         保存编辑
                     </Button>
