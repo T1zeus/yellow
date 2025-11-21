@@ -8,6 +8,12 @@ const { promisify } = require('util')
 const { MongoClient } = require('mongodb')
 const { progressStore } = require('./stores/progressStore')
 const { runPipelineNode } = require('./services/pipelineService')
+const {
+  loadAllTables,
+  loadTable,
+  saveSingleTable,
+  deleteTables,
+} = require('./services/mongoTableService')
 
 const execAsync = promisify(exec)
 
@@ -334,6 +340,15 @@ router.get('/records/:recordId/data', async (req, res) => {
         return res.status(404).json({ error: '记录不存在' })
       }
       
+      const tables = await loadAllTables(db, recordId)
+
+      // 兼容旧版本：如果 record.tables 依然存在，与新结构合并
+      const legacyTables = record.tables || {}
+      const mergedTables = { ...legacyTables }
+      Object.keys(tables).forEach(tableKey => {
+        mergedTables[tableKey] = tables[tableKey]
+      })
+
       // 返回完整记录数据（包含 tables, statistics, files 等）
       res.json({
         recordId: record.recordId,
@@ -341,7 +356,7 @@ router.get('/records/:recordId/data', async (req, res) => {
         updatedAt: record.updatedAt,
         statistics: record.statistics || {},
         files: record.files || [],
-        tables: record.tables || {},
+        tables: mergedTables,
       })
     } catch (mongoError) {
       console.error('[MongoDB] 查询记录失败:', mongoError.message)
@@ -381,7 +396,10 @@ router.put('/records/:recordId/data', async (req, res) => {
       }
       
       // 获取 result 表格数据
-      const resultData = record.tables?.result || []
+      let resultData = await loadTable(db, recordId, 'result')
+      if ((!resultData || resultData.length === 0) && Array.isArray(record.tables?.result)) {
+        resultData = record.tables.result
+      }
       
       // 创建证件号码到索引的映射
       const idNumberMap = new Map()
@@ -411,15 +429,17 @@ router.put('/records/:recordId/data', async (req, res) => {
       
       // 更新 MongoDB 中的记录
       const now = new Date()
-      await collection.updateOne(
-        { recordId },
-        {
-          $set: {
-            'tables.result': resultData,
-            updatedAt: now,
-          },
-        }
-      )
+      await Promise.all([
+        collection.updateOne(
+          { recordId },
+          {
+            $set: {
+              updatedAt: now,
+            },
+          }
+        ),
+        saveSingleTable(db, recordId, 'result', resultData),
+      ])
       
       console.log(`[MongoDB] 已更新记录: ${recordId}，更新了 ${updatedCount} 条数据`)
       
@@ -446,23 +466,7 @@ router.delete('/records/:recordId', async (req, res) => {
     const { recordId } = req.params
     const recordPath = path.join(RESULT_DIR, recordId)
     
-    // 安全检查：确保路径在 RESULT_DIR 内
-    const resolvedPath = path.resolve(recordPath)
-    const resolvedResultDir = path.resolve(RESULT_DIR)
-    if (!resolvedPath.startsWith(resolvedResultDir)) {
-      return res.status(403).json({ error: '访问被拒绝' })
-    }
-    
-    if (!fs.existsSync(recordPath)) {
-      return res.status(404).json({ error: '记录不存在' })
-    }
-    
-    // 检查是否为目录
-    if (!fs.statSync(recordPath).isDirectory()) {
-      return res.status(400).json({ error: '指定的路径不是目录' })
-    }
-    
-    // 删除 MongoDB 中的记录
+    // 先检查并删除 MongoDB 中的记录
     const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017'
     const DB_NAME = process.env.MONGO_DB_NAME || 'yellow_db'
     const client = new MongoClient(MONGO_URI)
@@ -473,46 +477,77 @@ router.delete('/records/:recordId', async (req, res) => {
       const db = client.db(DB_NAME)
       const collection = db.collection('analysis_records')
       
+      // 先检查记录是否存在
+      const record = await collection.findOne({ recordId })
+      if (!record) {
+        await client.close()
+        return res.status(404).json({ error: '记录不存在' })
+      }
+      
+      // 删除 MongoDB 中的记录
       const result = await collection.deleteOne({ recordId })
       if (result.deletedCount > 0) {
         mongoDeleted = true
         console.log(`[MongoDB] 已删除记录: ${recordId}`)
-      } else {
-        console.log(`[MongoDB] 记录不存在或已删除: ${recordId}`)
+        await deleteTables(db, recordId)
       }
     } catch (mongoError) {
       console.error('[MongoDB] 删除记录失败:', mongoError.message)
-      // 不中断流程，继续删除文件系统
+      await client.close()
+      return res.status(500).json({ error: '删除记录失败: ' + mongoError.message })
     } finally {
       await client.close()
     }
     
-    // 使用 PowerShell 将文件夹移动到系统回收站
-    // 转义路径中的特殊字符
-    const escapedPath = recordPath.replace(/'/g, "''").replace(/"/g, '`"')
-    
-    // PowerShell 命令：使用 FileSystem.DeleteDirectory 移动到回收站
-    const powershellCommand = `powershell -Command "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory('${escapedPath}', 'OnlyErrorDialogs', 'SendToRecycleBin')"`
-    
-    try {
-      await execAsync(powershellCommand)
-      console.log(`记录已移动到系统回收站: ${recordPath}`)
+    // 如果文件系统路径存在，则删除文件系统（可选操作）
+    if (fs.existsSync(recordPath)) {
+      // 安全检查：确保路径在 RESULT_DIR 内
+      const resolvedPath = path.resolve(recordPath)
+      const resolvedResultDir = path.resolve(RESULT_DIR)
+      if (!resolvedPath.startsWith(resolvedResultDir)) {
+        // 路径安全检查失败，但 MongoDB 记录已删除，返回成功
+        return res.json({ 
+          status: 'success',
+          message: '数据库记录已删除（文件系统路径安全检查失败）'
+        })
+      }
       
-      res.json({ 
-        status: 'success',
-        message: '记录已移动到回收站' + (mongoDeleted ? '，数据库记录已删除' : '')
-      })
-    } catch (execError) {
-      // 如果 PowerShell 命令失败，尝试直接删除（兼容性处理）
-      console.warn('移动到回收站失败，尝试直接删除:', execError.message)
-      fs.rmSync(recordPath, { recursive: true, force: true })
-      console.log(`记录已删除: ${recordPath}`)
-      
-      res.json({ 
-        status: 'success',
-        message: '记录删除成功' + (mongoDeleted ? '，数据库记录已删除' : '')
-      })
+      // 检查是否为目录
+      if (fs.statSync(recordPath).isDirectory()) {
+        // 使用 PowerShell 将文件夹移动到系统回收站
+        // 转义路径中的特殊字符
+        const escapedPath = recordPath.replace(/'/g, "''").replace(/"/g, '`"')
+        
+        // PowerShell 命令：使用 FileSystem.DeleteDirectory 移动到回收站
+        const powershellCommand = `powershell -Command "Add-Type -AssemblyName Microsoft.VisualBasic; [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory('${escapedPath}', 'OnlyErrorDialogs', 'SendToRecycleBin')"`
+        
+        try {
+          await execAsync(powershellCommand)
+          console.log(`记录已移动到系统回收站: ${recordPath}`)
+          
+          return res.json({ 
+            status: 'success',
+            message: '记录已移动到回收站，数据库记录已删除'
+          })
+        } catch (execError) {
+          // 如果 PowerShell 命令失败，尝试直接删除（兼容性处理）
+          console.warn('移动到回收站失败，尝试直接删除:', execError.message)
+          fs.rmSync(recordPath, { recursive: true, force: true })
+          console.log(`记录已删除: ${recordPath}`)
+          
+          return res.json({ 
+            status: 'success',
+            message: '记录删除成功，数据库记录已删除'
+          })
+        }
+      }
     }
+    
+    // MongoDB 记录已删除，文件系统路径不存在或不是目录
+    res.json({ 
+      status: 'success',
+      message: '数据库记录已删除' + (fs.existsSync(recordPath) ? '（文件系统路径不是目录）' : '（文件系统路径不存在）')
+    })
   } catch (error) {
     console.error('删除记录失败:', error)
     res.status(500).json({ error: '删除记录失败: ' + error.message })
@@ -555,7 +590,10 @@ router.get('/export/:recordId/:tableKey', async (req, res) => {
         return res.status(400).json({ error: '无效的表格类型' })
       }
       
-      const data = record.tables?.[tableKey] || []
+      let data = await loadTable(db, recordId, tableKey)
+      if ((!data || data.length === 0) && Array.isArray(record.tables?.[tableKey])) {
+        data = record.tables[tableKey]
+      }
       
       // 使用 excelService 生成 Excel
       const { writeArrayToExcel } = require('./services/excelService')

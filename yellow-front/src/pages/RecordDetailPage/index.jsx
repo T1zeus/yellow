@@ -3,7 +3,6 @@ import { Card, Table, Button, Space, Tag, message } from 'antd';
 import { DownloadOutlined, EyeOutlined, ReloadOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { getRecordData, exportRecordFile } from '../../services/resultService';
-import { formatFileSize } from '../../utils/format';
 
 const RecordDetailPage = () => {
     const { id } = useParams(); // 记录ID（文件夹名）

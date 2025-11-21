@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Button, Card, Table, Tag, Input, Space,
      Select, message, Spin, Modal, Statistic, Row, Col, Tabs, ConfigProvider } from 'antd';
-import zhCN from 'antd/locale/zh_CN';
+import zhCN from 'antd/lib/locale/zh_CN';
 import { SearchOutlined, SaveOutlined, WarningOutlined } from '@ant-design/icons';
 import { useParams } from 'react-router-dom';
 import { getRecordData, updateRecordData } from '../../services/resultService';

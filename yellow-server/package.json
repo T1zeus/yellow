@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "migrate:tables": "node ./scripts/migrateTables.js"
   },
   "keywords": [],
   "author": "",
@@ -17,11 +18,12 @@
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "iconv-lite": "^0.7.0",
+    "mongodb": "^6.9.0",
     "morgan": "^1.10.1",
     "multer": "^2.0.2",
     "nodemon": "^3.1.10",
     "openai": "^6.8.1",
-    "mongodb": "^6.9.0",
+    "pm2": "^6.0.13",
     "xlsx": "^0.18.5"
   }
 }

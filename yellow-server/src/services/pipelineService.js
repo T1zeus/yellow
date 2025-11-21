@@ -25,6 +25,7 @@ const {
 } = require('./statisticsService')
 const { progressStore } = require('../stores/progressStore')
 const { MongoClient } = require('mongodb')
+const { saveTables } = require('./mongoTableService')
 
 /**
  * 更新进度（分阶段）
@@ -90,7 +91,6 @@ async function saveToMongoDB({ recordId, tables }) {
       recordId,
       statistics,
       files: filesMeta,
-      tables,
       updatedAt: now,
     }
     
@@ -108,6 +108,8 @@ async function saveToMongoDB({ recordId, tables }) {
       },
       { upsert: true }
     )
+    
+    await saveTables(db, recordId, tables || {})
     
     console.log(`[MongoDB] 记录已保存: ${recordId}`)
     console.log(`[MongoDB] 统计数据:`, statistics)

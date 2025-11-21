@@ -1,6 +1,6 @@
 /**
- * DeepSeek API 测试脚本
- * 用于测试 DeepSeek API 是否能正常调用
+ * 通义千问 API 测试脚本
+ * 用于测试通义千问 API 是否能正常调用
  */
 
 require('dotenv').config()
@@ -8,13 +8,21 @@ const { askDeepSeek } = require('./utils/llmClient')
 
 // 测试配置信息
 function printConfig() {
-  console.log('\n========== DeepSeek API 配置信息 ==========')
-  console.log('API URL:', process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1/chat/completions')
-  console.log('模型:', process.env.DEEPSEEK_MODEL || 'deepseek-chat')
-  console.log('API Key:', process.env.DEEPSEEK_API_KEY ? `${process.env.DEEPSEEK_API_KEY.substring(0, 10)}...` : '未设置')
-  console.log('超时时间:', process.env.DEEPSEEK_TIMEOUT || '300', '秒')
-  console.log('温度:', process.env.DEEPSEEK_TEMPERATURE || '0.3')
-  console.log('最大 Token:', process.env.DEEPSEEK_MAX_TOKENS || '2048')
+  console.log('\n========== 通义千问 API 配置信息 ==========')
+  console.log('API URL:', process.env.QWEN_BASE_URL || 'http://38.160.65.151:3000/v1/chat/completions')
+  console.log('模型:', process.env.QWEN_MODEL || 'Qwen')
+  
+  // 检查环境变量中的 API Key
+  const envKey = process.env.QWEN_API_KEY || process.env.DASHSCOPE_API_KEY
+  if (envKey) {
+    console.log('API Key (环境变量):', `${envKey.substring(0, 10)}...`)
+  } else {
+    console.log('API Key (环境变量): 未设置，将使用代码中的默认值')
+  }
+  
+  console.log('超时时间:', process.env.QWEN_TIMEOUT || '300', '秒')
+  console.log('温度:', process.env.QWEN_TEMPERATURE || '0.3')
+  console.log('最大 Token:', process.env.QWEN_MAX_TOKENS || '32768')
   console.log('==========================================\n')
 }
 
@@ -53,7 +61,7 @@ answer:文城路358弄-6号嘉禾商务中心11楼1103室内
 
 // 运行测试
 async function runTest() {
-  console.log('🚀 开始测试 DeepSeek API...\n')
+  console.log('🚀 开始测试通义千问 API...\n')
   
   // 打印配置信息
   printConfig()

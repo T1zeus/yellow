@@ -4,7 +4,10 @@
  */
 
 // 后端服务器地址
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000'
+// 开发环境使用环境变量，生产环境使用相对路径（通过 nginx 代理）
+const API_BASE_URL = import.meta.env.PROD
+  ? ''  // 生产环境使用相对路径，nginx 会代理到后端
+  : (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000')
 
 /**
  * 通用请求方法

@@ -3,7 +3,7 @@ import {
   HistoryOutlined,
   FileOutlined,
 } from '@ant-design/icons';
-import { Layout, Menu, theme } from 'antd';
+import { Layout, Menu } from 'antd';
 import { Routes, Route, Link } from 'react-router-dom';
 
 import './styles/app.less';
@@ -29,9 +29,6 @@ const items = [
 
 const App = () => {
   const [collapsed, setCollapsed] = useState(false);
-  const {
-    token: { colorBgContainer },
-  } = theme.useToken();
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider collapsible collapsed={collapsed} onCollapse={value => setCollapsed(value)}>
@@ -39,7 +36,7 @@ const App = () => {
         <Menu theme="dark" defaultSelectedKeys={['1']} mode="inline" items={items} />
       </Sider>
       <Layout>
-        <Header style={{ padding: 0, background: colorBgContainer }} />
+        <Header style={{ padding: 0, background: '#fff' }} />
 
         <Content style={{ margin: '16px' }}>
           <Routes>

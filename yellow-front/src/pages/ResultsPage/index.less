@@ -49,11 +49,70 @@
     .ant-table-thead > tr > th {
       background: #fafafa;
       font-weight: 600;
-      white-space: nowrap; // 表头不换行
       border-bottom: 2px solid #d9d9d9;
       border-right: 1px solid #e8e8e8;
       padding: 8px 12px;
       text-align: center;
+      position: relative;
+      // 允许表头内容换行，确保列名完整显示
+      white-space: normal;
+      line-height: 1.4;
+      
+      // 表头内容容器
+      .ant-table-column-sorters,
+      .ant-table-header-column {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        position: relative;
+        flex-wrap: wrap; // 允许换行
+        gap: 4px; // 列名和按钮之间的间距
+      }
+      
+      // 列名文字样式 - 允许换行显示完整内容
+      .ant-table-column-title {
+        flex: 1;
+        min-width: 0; // 允许 flex 子元素收缩
+        text-align: center;
+        line-height: 1.4;
+        word-break: break-word; // 允许换行
+        overflow-wrap: break-word;
+        white-space: normal; // 允许换行
+        display: inline-block;
+      }
+      
+      // 筛选按钮容器 - 不收缩，始终显示
+      .ant-table-filter-trigger-container {
+        flex-shrink: 0; // 不允许收缩
+        z-index: 10;
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        cursor: pointer;
+        margin-left: 2px;
+      }
+      
+      .ant-table-filter-trigger {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 2px 4px;
+        min-width: 20px;
+        min-height: 20px;
+        z-index: 11;
+        position: relative;
+        pointer-events: auto;
+        flex-shrink: 0;
+      }
+      
+      // 排序图标
+      .ant-table-column-sorter {
+        flex-shrink: 0;
+        margin-left: 2px;
+        z-index: 10;
+      }
     }
     
     // 表格单元格：允许文本换行显示
