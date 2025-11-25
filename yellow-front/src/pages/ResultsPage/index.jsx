@@ -114,7 +114,7 @@ const ResultsPage = () => {
     });
 
     // 编辑状态管理（记录正在编辑的单元格）
-    const [editingCell, setEditingCell] = useState(null); // { idNumber: 'xxx', field: '案由' }
+    const [editingCell, setEditingCell] = useState(null); // { idNumber: 'xxx', field: '地点分类' }
     // 编辑数据管理（记录所有修改）
     const [editingData, setEditingData] = useState({}); // { idNumber: { field: value } }
 
@@ -519,29 +519,29 @@ const ResultsPage = () => {
             },
         },
         {
-            title: '前科案发分类',
-            dataIndex: '案由',
-            key: '案由',
+            title: '前科案发地分类',
+            dataIndex: '地点分类',
+            key: '地点分类',
             width: 95,
-            filters: data.length > 0 ? generateFilters('案由', data) : [],
+            filters: data.length > 0 ? generateFilters('地点分类', data) : [],
             onFilter: (value, record) => {
                 if (value === null) {
-                    return !record['案由'] || String(record['案由']).trim() === '';
+                    return !record['地点分类'] || String(record['地点分类']).trim() === '';
                 }
-                return String(record['案由'] || '').trim() === value;
+                return String(record['地点分类'] || '').trim() === value;
             },
             render: (text, record) => {
                 const idNumber = String(record['证件号码'] || '').trim();
-                const isEditing = editingCell?.idNumber === idNumber && editingCell?.field === '案由';
+                const isEditing = editingCell?.idNumber === idNumber && editingCell?.field === '地点分类';
                 
                 if (isEditing) {
-                    const editedValue = editingData[idNumber]?.['案由'];
+                    const editedValue = editingData[idNumber]?.['地点分类'];
                     const displayValue = editedValue !== undefined ? editedValue : text;
                     return (
                         <Input
                             value={displayValue || ''}
                             autoFocus
-                            onChange={(e) => handleFieldChange(idNumber, '案由', e.target.value)}
+                            onChange={(e) => handleFieldChange(idNumber, '地点分类', e.target.value)}
                             onBlur={() => setEditingCell(null)}
                             onPressEnter={() => setEditingCell(null)}
                             size="small"
@@ -551,7 +551,7 @@ const ResultsPage = () => {
                 }
                 
                 // 保持原有格式，显示编辑后的值
-                const editedValue = editingData[idNumber]?.['案由'];
+                const editedValue = editingData[idNumber]?.['地点分类'];
                 const displayValue = editedValue !== undefined ? editedValue : text;
                 if (!displayValue) return '-';
                 const categories = String(displayValue)
@@ -568,7 +568,7 @@ const ResultsPage = () => {
                             wordBreak: 'break-word',
                             cursor: 'pointer'
                         }}
-                        onDoubleClick={() => setEditingCell({ idNumber, field: '案由' })}
+                        onDoubleClick={() => setEditingCell({ idNumber, field: '地点分类' })}
                     >
                         {categories.map((cat, index) => (
                             <div key={index} style={{ 

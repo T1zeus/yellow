@@ -3,6 +3,8 @@
  * 计算同住情况，生成居住详细
  */
 
+const { cleanIdNumber } = require('./dataMergeService')
+
 /**
  * 安全获取值（处理 null/undefined/NaN）
  * @param {any} val - 值
@@ -47,32 +49,45 @@ function calculateRoommate(roommateData, mergedData) {
     }))
   }
 
-  // 1. 清理和标准化数据
+  // 1. 清理和标准化数据（使用 cleanIdNumber 统一证件号码格式）
   const cleanedRoommateData = roommateData.map(row => ({
     ...row,
     居住地址: String(row['居住地址'] || row['实口居住地址'] || '').trim(),
-    证件号码: String(row['证件号码'] || '').trim(),
+    证件号码: cleanIdNumber(row['证件号码'] || ''),
   })).filter(row => {
-    // 过滤掉居住地址为空的数据
+    // 过滤掉居住地址为空或证件号码无效的数据
     const addr = row['居住地址']
-    return addr && addr !== '' && addr !== 'undefined' && addr !== 'null'
+    const id = row['证件号码']
+    return addr && addr !== '' && addr !== 'undefined' && addr !== 'null' && id && id !== ''
   })
 
   const cleanedMergedData = mergedData.map(row => ({
     ...row,
     居住地址: String(row['居住地址'] || row['实口居住地址'] || '').trim(),
-    证件号码: String(row['证件号码'] || '').trim(),
-  }))
+    证件号码: cleanIdNumber(row['证件号码'] || ''),
+  })).filter(row => {
+    // 过滤掉证件号码无效的数据
+    const id = row['证件号码']
+    return id && id !== ''
+  })
 
   // 2. 按居住地址分组（使用 Map 优化查找）
+  // 同时去重：同一地址下，同一证件号码只保留一条记录
   const addressGroups = new Map()
+  const seenIds = new Map() // 用于记录每个地址下已见过的证件号码
   for (const row of cleanedRoommateData) {
     const addr = row['居住地址']
-    if (addr && addr !== '') {
+    const id = row['证件号码']
+    if (addr && addr !== '' && id && id !== '') {
       if (!addressGroups.has(addr)) {
         addressGroups.set(addr, [])
+        seenIds.set(addr, new Set())
       }
-      addressGroups.get(addr).push(row)
+      // 如果该地址下还没有这个证件号码，则添加
+      if (!seenIds.get(addr).has(id)) {
+        addressGroups.get(addr).push(row)
+        seenIds.get(addr).add(id)
+      }
     }
   }
 
@@ -95,9 +110,9 @@ function calculateRoommate(roommateData, mergedData) {
     // 查找该地址的所有人员
     const group = addressGroups.get(addr) || []
 
-    // 排除自己，查找其他同住人
+    // 排除自己，查找其他同住人（idc 已经是清理后的证件号码）
     const others = group.filter(r => {
-      const otherId = String(r['证件号码'] || '').trim()
+      const otherId = r['证件号码'] // 已经是清理后的证件号码
       return otherId !== '' && otherId !== idc
     })
 

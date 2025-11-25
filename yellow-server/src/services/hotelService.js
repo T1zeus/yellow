@@ -319,6 +319,11 @@ function processingHotel(hotelFolderPath) {
       // 匹配到对应的女性，为每个女性生成一条同住详细信息
       const femaleList = femaleStayIndexWithName.get(matchKey)
       for (const female of femaleList) {
+        // 修复：如果男性证件号码和女性证件号码相同，跳过（避免自己和自己）
+        if (maleId === female.id) {
+          continue
+        }
+        
         const detail = `- ${checkInTime}-${checkOutTime}: ${female.name} 和 ${maleName}(男）证件号：${maleId}在${hotelName}${roomNumber}房间-地址：${address}`
         
         // 解析时间用于排序
